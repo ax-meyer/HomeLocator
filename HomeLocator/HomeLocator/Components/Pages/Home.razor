@@ -1,0 +1,168 @@
+@page "/"
+@inject PropertyService PropertyService
+@inject GeocodingService GeocodingService
+@inject AppMetrics AppMetrics
+@using HomeLocator.Services
+@using HomeLocator.Models
+
+<PageTitle>HomeLocator – Grundstückssuche NRW</PageTitle>
+
+<h1 class="mb-1">Grundstückssuche NRW</h1>
+<p class="text-muted mb-3">
+    Finde die Adresse eines Grundstücks anhand von PLZ / Gemeinde und Grundstücksgröße.
+</p>
+
+@if (_lastImport == null)
+{
+    <div class="alert alert-warning mb-3">
+        <strong>Noch keine Daten importiert.</strong>
+        Der automatische Import läuft täglich um 03:00 Uhr UTC.
+    </div>
+}
+else
+{
+    <p class="text-muted small mb-3">
+        Daten vom @DateTimeOffset.FromUnixTimeMilliseconds(_lastImport.ImportedAt).ToLocalTime().ToString("dd.MM.yyyy, HH:mm") Uhr
+        · @_lastImport.RecordCount.ToString("N0") Einträge
+    </p>
+}
+
+<div class="row g-3 mb-4 align-items-end">
+    <div class="col-sm-6 col-md-3">
+        <RadzenLabel Text="PLZ" />
+        <RadzenDropDown @bind-Value="_plz" Data="@_plzOptions"
+                        AllowFiltering="true" AllowClear="true"
+                        FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Placeholder="PLZ wählen …" class="w-100" />
+    </div>
+    <div class="col-sm-6 col-md-3">
+        <RadzenLabel Text="Gemeinde" />
+        <RadzenDropDown @bind-Value="_gemeinde" Data="@_gemeindeOptions"
+                        AllowFiltering="true" AllowClear="true"
+                        FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Placeholder="Gemeinde wählen …" class="w-100" />
+    </div>
+    <div class="col-sm-6 col-md-2">
+        <RadzenLabel Text="Fläche min (m²)" />
+        <RadzenNumeric @bind-Value="_minFlaeche" class="w-100" TValue="double?" />
+    </div>
+    <div class="col-sm-6 col-md-2">
+        <RadzenLabel Text="Fläche max (m²)" />
+        <RadzenNumeric @bind-Value="_maxFlaeche" class="w-100" TValue="double?" />
+    </div>
+    <div class="col-sm-12 col-md-2">
+        <RadzenButton Text="Suchen" Click="Search"
+                      ButtonStyle="ButtonStyle.Primary" class="w-100"
+                      IsBusy="_loading" BusyText="Suche läuft …" />
+    </div>
+</div>
+
+<!-- Google AdSense – replace ca-pub-XXXXXXXXXXXXXXXX and slot with your values -->
+<div class="mb-4">
+    <ins class="adsbygoogle"
+         style="display:block"
+         data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+         data-ad-slot="XXXXXXXXXX"
+         data-ad-format="auto"
+         data-full-width-responsive="true"></ins>
+    <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+</div>
+
+@if (_searched)
+{
+    @if (_properties.Count == 0)
+    {
+        <p class="text-muted">Keine Grundstücke gefunden.</p>
+    }
+    else
+    {
+        <p class="text-muted">
+            @_properties.Count Ergebnis@(_properties.Count == 1 ? "" : "se")
+            @if (_properties.Count == MaxResults)
+            {
+                <span> – Anzeige auf @MaxResults begrenzt. Bitte Filter eingrenzen.</span>
+            }
+        </p>
+
+        <RadzenDataGrid TItem="Property" Data="@_properties"
+                        AllowFiltering="true" AllowSorting="true"
+                        AllowPaging="true" PageSize="25"
+                        RowExpand="@OnRowExpand">
+            <Template Context="property">
+                <PropertyDetail Property="property" Coords="_coords.GetValueOrDefault(property.Id)" />
+            </Template>
+            <Columns>
+                <RadzenDataGridColumn TItem="Property" Property="Str"         Title="Straße" />
+                <RadzenDataGridColumn TItem="Property" Property="Hnr"         Title="Nr."      Width="70px" />
+                <RadzenDataGridColumn TItem="Property" Property="HnrZus"      Title="Zusatz"   Width="80px" />
+                <RadzenDataGridColumn TItem="Property" Property="Plz"         Title="PLZ"      Width="80px" />
+                <RadzenDataGridColumn TItem="Property" Property="Ort"         Title="Ort" />
+                <RadzenDataGridColumn TItem="Property" Property="Gemeinde"    Title="Gemeinde" />
+                <RadzenDataGridColumn TItem="Property" Property="FlaecheAmtl" Title="Fläche (m²)" Width="120px" />
+            </Columns>
+        </RadzenDataGrid>
+    }
+}
+else
+{
+    <p class="text-muted">Wähle eine PLZ oder Gemeinde und klicke auf <strong>Suchen</strong>.</p>
+}
+
+@code {
+    private const int MaxResults = 500;
+
+    private string? _plz;
+    private string? _gemeinde;
+    private double? _minFlaeche;
+    private double? _maxFlaeche;
+    private List<Property> _properties = [];
+    private bool _searched;
+    private bool _loading;
+    private ImportLog? _lastImport;
+    private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
+
+    private List<string> _plzOptions = [];
+    private List<string> _gemeindeOptions = [];
+
+    // propertyId → (lat, lon)
+    private readonly Dictionary<int, (double Lat, double Lon)> _coords = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _lastImport = await PropertyService.GetLastImportAsync();
+        _plzOptions = await PropertyService.GetDistinctPlzAsync();
+        _gemeindeOptions = await PropertyService.GetDistinctGemeindenAsync();
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            AppMetrics.RecordPageLoad();
+        return Task.CompletedTask;
+    }
+
+    private async Task Search()
+    {
+        if (DateTimeOffset.UtcNow - _lastSearchAt < TimeSpan.FromSeconds(1))
+            return;
+
+        _lastSearchAt = DateTimeOffset.UtcNow;
+        _loading = true;
+        _coords.Clear();
+        AppMetrics.RecordSearch();
+        _properties = await PropertyService.GetPropertiesAsync(_gemeinde, _plz, _minFlaeche, _maxFlaeche, MaxResults);
+        _searched = true;
+        _loading = false;
+    }
+
+    private async Task OnRowExpand(Property property)
+    {
+        if (_coords.ContainsKey(property.Id)) return;
+        var coords = await GeocodingService.GeocodeAsync(property);
+        if (coords.HasValue)
+        {
+            _coords[property.Id] = coords.Value;
+            StateHasChanged();
+        }
+    }
+}

@@ -1,0 +1,86 @@
+@using HomeLocator.Models
+@using HomeLocator.Services
+@inject AppMetrics AppMetrics
+
+@* Inline expansion panel shown below a clicked result row. *@
+
+<div class="p-3 bg-light border-top">
+    <div class="row g-3">
+
+        @* ── Map ──────────────────────────────────────────────────────────── *@
+        <div class="col-md-6">
+            @if (Coords != default)
+            {
+                var (lat, lon) = Coords;
+                var delta = 0.003;
+                var bbox = $"{lon - delta},{lat - delta},{lon + delta},{lat + delta}";
+                var src = $"https://www.openstreetmap.org/export/embed.html?bbox={bbox}&layer=mapnik&marker={lat},{lon}";
+                <iframe src="@src" style="width:100%;height:260px;border:1px solid #ccc;border-radius:4px;"
+                        loading="lazy" title="Karte"></iframe>
+            }
+            else
+            {
+                <div class="d-flex align-items-center justify-content-center bg-white border rounded"
+                     style="height:260px;color:#6c757d;">
+                    <span>Karte wird geladen …</span>
+                </div>
+            }
+        </div>
+
+        @* ── Links ────────────────────────────────────────────────────────── *@
+        <div class="col-md-6 d-flex flex-column gap-2">
+            <h6 class="mb-2">Karten &amp; Informationen</h6>
+
+            <a href="@GoogleMapsUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+               @onclick="ClickGoogle">
+                Google Maps
+            </a>
+            <a href="@OsmUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+               @onclick="ClickOsm">
+                OpenStreetMap
+            </a>
+            <a href="@LaermUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+               @onclick="ClickLaerm">
+                NRW Lärmkarte
+            </a>
+            <a href="@HochwasserUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+               @onclick="ClickHochwasser">
+                NRW Hochwasserkarte
+            </a>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Property Property { get; set; } = null!;
+
+    /// <summary>WGS-84 coordinates; default((double,double)) means not yet resolved.</summary>
+    [Parameter] public (double Lat, double Lon) Coords { get; set; }
+
+    private string AddressQuery =>
+        Uri.EscapeDataString(
+            string.Join(", ",
+                new[] { $"{Property.Str} {Property.Hnr}{Property.HnrZus}", Property.Plz, Property.Ort }
+                    .Where(s => !string.IsNullOrWhiteSpace(s))));
+
+    private string GoogleMapsUrl => Coords != default
+        ? $"https://www.google.com/maps?q={Coords.Lat},{Coords.Lon}"
+        : $"https://www.google.com/maps/search/{AddressQuery}";
+
+    private string OsmUrl => Coords != default
+        ? $"https://www.openstreetmap.org/?mlat={Coords.Lat}&mlon={Coords.Lon}&zoom=17"
+        : $"https://www.openstreetmap.org/search?query={AddressQuery}";
+
+    private string LaermUrl => Coords != default
+        ? $"https://www.umgebungslaerm-kartierung.nrw.de/#map=15/{Coords.Lon}/{Coords.Lat}"
+        : "https://www.umgebungslaerm-kartierung.nrw.de/";
+
+    private string HochwasserUrl => Coords != default
+        ? $"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15"
+        : "https://www.hochwasserkarten.nrw.de/";
+
+    private void ClickGoogle()     => AppMetrics.RecordMapClick("google");
+    private void ClickOsm()        => AppMetrics.RecordMapClick("osm");
+    private void ClickLaerm()      => AppMetrics.RecordMapClick("laerm");
+    private void ClickHochwasser() => AppMetrics.RecordMapClick("hochwasser");
+}
