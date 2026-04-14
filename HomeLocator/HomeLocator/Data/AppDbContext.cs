@@ -16,6 +16,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             b.HasIndex(p => p.Plz);
             b.HasIndex(p => p.Gemeinde);
+            b.HasOne(p => p.ImportLog)
+             .WithMany()
+             .HasForeignKey(p => p.ImportLogId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

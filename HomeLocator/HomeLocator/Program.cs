@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Threading.RateLimiting;
 using HomeLocator.Components;
 using HomeLocator.Data;
@@ -12,6 +11,9 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var enableDevSeeding = builder.Configuration.GetValue<bool>("EnableDevSeeding");
+
+builder.Logging.ClearProviders();
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)
@@ -20,22 +22,14 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .WriteTo.Console());
 
 // ── Database ──────────────────────────────────────────────────────────────────
-if (Debugger.IsAttached)
-{
-    builder.Services.AddDbContext<AppDbContext>(o =>
-        o.UseSqlite("Data Source=homelocator-dev.db"));
-}
-else
-{
-    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not configured.");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not configured.");
 
-    var dataSource = NpgsqlDataSource.Create(connectionString);
-    builder.Services.AddSingleton(dataSource);
-    builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
-    builder.Services.AddTransient<DataImportService>();
-    builder.Services.AddHostedService<ImportWorker>();
-}
+var dataSource = NpgsqlDataSource.Create(connectionString);
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
+builder.Services.AddTransient<DataImportService>();
+builder.Services.AddHostedService<ImportWorker>();
 
 // ── Metrics (prometheus-net) ──────────────────────────────────────────────────
 builder.Services.AddSingleton<AppMetrics>();
@@ -81,14 +75,10 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    if (Debugger.IsAttached)
+    await db.Database.MigrateAsync();
+    if (app.Environment.IsDevelopment() && enableDevSeeding)
     {
-        await db.Database.EnsureCreatedAsync();
         await DevSeeder.SeedAsync(db);
-    }
-    else
-    {
-        await db.Database.MigrateAsync();
     }
 }
 

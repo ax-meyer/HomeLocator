@@ -12,4 +12,6 @@ public class Property
     public string? Ort { get; set; }
     public string? Gemeinde { get; set; }
     public double? FlaecheAmtl { get; set; }
+    public int ImportLogId { get; set; }
+    public ImportLog ImportLog { get; set; } = null!;
 }

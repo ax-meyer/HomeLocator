@@ -1,0 +1,88 @@
+services:
+  app:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/homelocator:latest
+    build:
+      context: ./HomeLocator
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=db;Database=homelocator;Username=homelocator;Password=${DB_PASSWORD}"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      # HTTPS router
+      - "traefik.http.routers.homelocator.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.homelocator.entrypoints=websecure"
+      - "traefik.http.routers.homelocator.tls.certresolver=letsencrypt"
+      - "traefik.http.services.homelocator.loadbalancer.server.port=8080"
+      # HTTP → HTTPS redirect
+      - "traefik.http.routers.homelocator-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.homelocator-http.entrypoints=web"
+      - "traefik.http.routers.homelocator-http.middlewares=redirect-https"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
+      # Watchtower: only update this container
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - proxy
+      - internal
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homelocator
+      POSTGRES_USER: homelocator
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homelocator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  prometheus:
+    image: prom/prometheus:v3
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - internal
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD}"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    networks:
+      - internal
+
+networks:
+  proxy:
+  internal:
+    internal: true
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:

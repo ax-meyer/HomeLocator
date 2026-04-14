@@ -29,5 +29,5 @@ public class ManifestFile
     public string Size { get; set; } = string.Empty;
 
     [JsonPropertyName("timestamp")]
-    public string Timestamp { get; set; } = string.Empty;
+    public DateTime Timestamp { get; set; }
 }
