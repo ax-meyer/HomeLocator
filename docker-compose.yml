@@ -8,6 +8,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__DefaultConnection: "Host=db;Database=homelocator;Username=homelocator;Password=${DB_PASSWORD}"
+    volumes:
+      - dataprotection_keys:/root/.aspnet/DataProtection-Keys
     depends_on:
       db:
         condition: service_healthy
@@ -54,3 +56,4 @@ networks:
 
 volumes:
   postgres_data:
+  dataprotection_keys:
