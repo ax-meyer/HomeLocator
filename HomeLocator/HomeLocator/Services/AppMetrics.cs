@@ -1,25 +1,39 @@
-using Prometheus;
+using System.Diagnostics.Metrics;
 
 namespace HomeLocator.Services;
 
-public sealed class AppMetrics
+/// <summary>
+/// Thin instrumentation layer built on System.Diagnostics.Metrics (OpenTelemetry-compatible).
+/// The <see cref="TelemetryWorker"/> subscribes via <see cref="MeterListener"/> and persists
+/// aggregated daily counts to the database.
+/// </summary>
+public sealed class AppMetrics : IDisposable
 {
-    private readonly Counter _pageLoads;
-    private readonly Counter _searches;
-    private readonly Counter _mapClicks;
+    public const string MeterName = "HomeLocator";
+    public const string PageLoadsName = "homelocator.page_loads";
+    public const string SearchesName = "homelocator.searches";
+    public const string TableRowOpensName = "homelocator.table_row_opens";
+    public const string OutgoingClicksName = "homelocator.outgoing_clicks";
+
+    private readonly Meter _meter;
+    private readonly Counter<long> _pageLoads;
+    private readonly Counter<long> _searches;
+    private readonly Counter<long> _tableRowOpens;
+    private readonly Counter<long> _outgoingClicks;
 
     public AppMetrics()
     {
-        _pageLoads = Metrics.CreateCounter(
-            "homelocator_page_loads_total", "Homepage visits (interactive sessions)");
-        _searches  = Metrics.CreateCounter(
-            "homelocator_searches_total", "Property search queries executed");
-        _mapClicks = Metrics.CreateCounter(
-            "homelocator_map_clicks_total", "External map link clicks",
-            new CounterConfiguration { LabelNames = ["map"] });
+        _meter = new Meter(MeterName, "1.0");
+        _pageLoads      = _meter.CreateCounter<long>(PageLoadsName,      description: "Homepage-Aufrufe (interaktive Sessions)");
+        _searches       = _meter.CreateCounter<long>(SearchesName,       description: "Ausgeführte Suchanfragen");
+        _tableRowOpens  = _meter.CreateCounter<long>(TableRowOpensName,  description: "Geöffnete Tabelleneinträge");
+        _outgoingClicks = _meter.CreateCounter<long>(OutgoingClicksName, description: "Klicks auf ausgehende Links");
     }
 
-    public void RecordPageLoad()               => _pageLoads.Inc();
-    public void RecordSearch()                 => _searches.Inc();
-    public void RecordMapClick(string mapName) => _mapClicks.WithLabels(mapName).Inc();
+    public void RecordPageLoad()                    => _pageLoads.Add(1);
+    public void RecordSearch()                      => _searches.Add(1);
+    public void RecordTableRowOpen()                => _tableRowOpens.Add(1);
+    public void RecordOutgoingClick(string button)  => _outgoingClicks.Add(1, new KeyValuePair<string, object?>("button", button));
+
+    public void Dispose() => _meter.Dispose();
 }

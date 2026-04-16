@@ -59,8 +59,8 @@
         ? $"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15"
         : "https://www.hochwasserkarten.nrw.de/";
 
-    private void ClickGoogle()     => AppMetrics.RecordMapClick("google");
-    private void ClickOsm()        => AppMetrics.RecordMapClick("osm");
-    private void ClickLaerm()      => AppMetrics.RecordMapClick("laerm");
-    private void ClickHochwasser() => AppMetrics.RecordMapClick("hochwasser");
+    private void ClickGoogle()     => AppMetrics.RecordOutgoingClick("google");
+    private void ClickOsm()        => AppMetrics.RecordOutgoingClick("osm");
+    private void ClickLaerm()      => AppMetrics.RecordOutgoingClick("laerm");
+    private void ClickHochwasser() => AppMetrics.RecordOutgoingClick("hochwasser");
 }

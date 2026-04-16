@@ -6,7 +6,6 @@ using HomeLocator.Services;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
-using Prometheus;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,8 +30,9 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 builder.Services.AddTransient<DataImportService>();
 builder.Services.AddHostedService<ImportWorker>();
 
-// ── Metrics (prometheus-net) ──────────────────────────────────────────────────
+// ── Telemetrie (OpenTelemetry-kompatibel via System.Diagnostics.Metrics) ──────
 builder.Services.AddSingleton<AppMetrics>();
+builder.Services.AddHostedService<TelemetryWorker>();
 
 // ── Shared services ───────────────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
@@ -90,14 +90,10 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
-app.UseHttpMetrics();
 app.UseRateLimiter();
 app.UseAntiforgery();
 
 app.MapHealthChecks("/health");
-// Only reachable by Prometheus on the internal Docker network (host header = "app" or "app:8080")
-app.MapMetrics()
-   .RequireHost("app", "app:8080", "localhost", "localhost:8080", "localhost:5000", "localhost:7000");
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

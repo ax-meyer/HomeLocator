@@ -157,6 +157,7 @@ else
 
     private async Task OnRowExpand(Property property)
     {
+        AppMetrics.RecordTableRowOpen();
         if (_coords.ContainsKey(property.Id)) return;
         var coords = await GeocodingService.GeocodeAsync(property);
         if (coords.HasValue)

@@ -7,10 +7,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 {
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<ImportLog> ImportLogs => Set<ImportLog>();
+    public DbSet<DailyTelemetry> DailyTelemetry => Set<DailyTelemetry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<DailyTelemetry>(b =>
+        {
+            b.HasKey(t => t.Date);
+        });
 
         modelBuilder.Entity<Property>(b =>
         {
