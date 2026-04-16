@@ -88,6 +88,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.UseStaticFiles(); // Must be before UseStatusCodePagesWithReExecute to prevent HTML 404 pages for static assets
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseRateLimiter();
 app.UseAntiforgery();
