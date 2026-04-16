@@ -29,10 +29,9 @@ public static class DevSeeder
         using var reader = new StreamReader(csvPath);
         var headerSkipped = false;
 
-        while (!reader.EndOfStream)
+        string? line;
+        while ((line = await reader.ReadLineAsync()) != null)
         {
-            var line = await reader.ReadLineAsync();
-            if (line == null) continue;
             if (!headerSkipped) { headerSkipped = true; continue; }
 
             var p = CsvParser.ParseLine(line);

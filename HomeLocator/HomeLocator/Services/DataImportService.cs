@@ -151,12 +151,10 @@ public class DataImportService(
         long count = 0;
         var headerSkipped = false;
 
-        while (!reader.EndOfStream)
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-
-            var line = await reader.ReadLineAsync(ct);
-            if (line == null) continue;
 
             if (!headerSkipped) { headerSkipped = true; continue; }
 
