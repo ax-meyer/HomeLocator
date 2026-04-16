@@ -19,21 +19,14 @@ services:
       start_period: 30s
     labels:
       - "traefik.enable=true"
-      # HTTPS router
-      - "traefik.http.routers.homelocator.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.homelocator.entrypoints=websecure"
-      - "traefik.http.routers.homelocator.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.homelocator.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.homelocator.tls=true"
       - "traefik.http.services.homelocator.loadbalancer.server.port=8080"
-      # HTTP → HTTPS redirect
-      - "traefik.http.routers.homelocator-http.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.homelocator-http.entrypoints=web"
-      - "traefik.http.routers.homelocator-http.middlewares=redirect-https"
-      - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
       # Watchtower: only update this container
       - "com.centurylinklabs.watchtower.enable=true"
     networks:
-      - proxy
+      - web
       - internal
 
   db:
@@ -54,7 +47,8 @@ services:
       - internal
 
 networks:
-  proxy:
+  web:
+    external: true
   internal:
     internal: true
 
