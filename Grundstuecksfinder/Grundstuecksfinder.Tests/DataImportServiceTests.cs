@@ -22,7 +22,11 @@ public class DataImportServiceTests(PostgresFixture fixture) : IAsyncLifetime
     private const string BaseDownloadUrl = "http://fake/downloads/";
     private const string DatasetName = "grundsteuer_nrw";
     private const string ZipFileName = "grundsteuer.zip";
-    private const string ZipTimestamp = "2026-01-01T00:00:00Z";
+
+    // opengeodata.nrw.de serves files directly under the base URL, with no dataset-name
+    // path segment. Format matches the real manifest (and the "s" format the service stores).
+    private const string ZipTimestamp = "2026-01-01T00:00:00";
+    private const string ZipUrl = $"{BaseDownloadUrl}{ZipFileName}";
 
     public async Task InitializeAsync() => await fixture.ResetAsync();
     public Task DisposeAsync() => Task.CompletedTask;
@@ -92,7 +96,7 @@ public class DataImportServiceTests(PostgresFixture fixture) : IAsyncLifetime
             Content = new StringContent(BuildManifestJson(), Encoding.UTF8, "application/json")
         });
         handler.AddRoute(
-            $"{BaseDownloadUrl}{DatasetName}/{ZipFileName}",
+            ZipUrl,
             () => new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(BuildZipWithCsv())
@@ -115,7 +119,7 @@ public class DataImportServiceTests(PostgresFixture fixture) : IAsyncLifetime
             Content = new StringContent(BuildManifestJson(), Encoding.UTF8, "application/json")
         });
         handler.AddRoute(
-            $"{BaseDownloadUrl}{DatasetName}/{ZipFileName}",
+            ZipUrl,
             () => new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(BuildZipWithCsv())
@@ -158,7 +162,7 @@ public class DataImportServiceTests(PostgresFixture fixture) : IAsyncLifetime
             Content = new StringContent(BuildManifestJson(), Encoding.UTF8, "application/json")
         });
         handler.AddRoute(
-            $"{BaseDownloadUrl}{DatasetName}/{ZipFileName}",
+            ZipUrl,
             () =>
             {
                 downloadCalled = true;

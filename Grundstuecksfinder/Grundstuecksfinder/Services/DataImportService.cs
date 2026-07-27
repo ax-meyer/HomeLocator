@@ -79,7 +79,7 @@ public class DataImportService(
         HttpClient http,
         CancellationToken ct)
     {
-        var url = $"{BaseDownloadUrl}/{zipFile.Name}";
+        var url = $"{BaseDownloadUrl.TrimEnd('/')}/{zipFile.Name}";
 
         // The ZIP can be several GB – download to a temp file first so ZipArchive can seek.
         // Ensure the host has at least 10 GB of free disk space.
