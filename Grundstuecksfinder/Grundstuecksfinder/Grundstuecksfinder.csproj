@@ -12,16 +12,23 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.5">
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
         </PackageReference>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.5">
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.10">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
         </PackageReference>
-        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
-        <PackageReference Include="Radzen.Blazor" Version="10.2.0" />
+        <!-- Pinned explicitly so the version this project compiles against also
+             flows to the test project. EF Design/Tools raise Relational to
+             10.0.10 but are PrivateAssets=all, so without this the test host
+             resolves the lower version the Npgsql provider pulls, which was
+             both an MSB3277 conflict warning and a runtime
+             FileNotFoundException. -->
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+        <PackageReference Include="Radzen.Blazor" Version="11.1.8" />
         <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
         <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
         <PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0" />

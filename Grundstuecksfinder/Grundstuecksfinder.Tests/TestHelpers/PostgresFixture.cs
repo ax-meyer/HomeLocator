@@ -1,4 +1,3 @@
-using DotNet.Testcontainers.Builders;
 using Xunit;
 using Grundstuecksfinder.Data;
 using Microsoft.EntityFrameworkCore;
@@ -13,10 +12,11 @@ namespace Grundstuecksfinder.Tests.TestHelpers;
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
-        .WithImage("postgres:17-alpine")
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilPortIsAvailable(5432))
-        .Build();
+    // No explicit wait strategy: the PostgreSql module's default waits until the
+    // server actually accepts connections. The previous bare TCP port probe was
+    // weaker, since the port opens before Postgres is ready to serve queries.
+    private readonly PostgreSqlContainer _container =
+        new PostgreSqlBuilder("postgres:17-alpine").Build();
 
     public string ConnectionString => _container.GetConnectionString();
     public NpgsqlDataSource DataSource { get; private set; } = null!;
