@@ -12,7 +12,7 @@ public class PropertyServiceTests : IAsyncLifetime
     private AppDbContext _context = null!;
     private PropertyService _service = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -31,7 +31,7 @@ public class PropertyServiceTests : IAsyncLifetime
         await _context.SaveChangesAsync();
     }
 
-    public async Task DisposeAsync() => await _context.DisposeAsync();
+    public async ValueTask DisposeAsync() => await _context.DisposeAsync();
 
     [Fact]
     public async Task GetPropertiesAsync_FilterByPlz_ReturnsOnlyMatchingEntries()

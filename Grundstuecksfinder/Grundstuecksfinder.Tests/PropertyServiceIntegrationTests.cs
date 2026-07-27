@@ -9,8 +9,8 @@ namespace Grundstuecksfinder.Tests;
 [Collection("Postgres")]
 public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
-    public async Task InitializeAsync() => await fixture.ResetAsync();
-    public Task DisposeAsync() => Task.CompletedTask;
+    public async ValueTask InitializeAsync() => await fixture.ResetAsync();
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     /// <summary>
     /// Property.ImportLogId is a required FK, so every seeded property needs a parent

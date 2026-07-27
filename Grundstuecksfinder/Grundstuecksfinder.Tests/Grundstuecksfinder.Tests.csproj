@@ -5,6 +5,13 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <IsPackable>false</IsPackable>
+        <!-- xUnit v3 test projects are self-executing: the runner is compiled in
+             rather than supplied by an external VSTest host. -->
+        <OutputType>Exe</OutputType>
+        <!-- Generate a Microsoft.Testing.Platform entry point instead of xUnit's
+             own in-process console runner. Pairs with the test.runner setting in
+             global.json, which points "dotnet test" at MTP. -->
+        <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     </PropertyGroup>
 
     <ItemGroup>
@@ -13,13 +20,12 @@
         <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.10" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
         <PackageReference Include="Testcontainers.PostgreSql" Version="4.13.0" />
-        <PackageReference Include="xunit" Version="2.9.3" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
-            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-            <PrivateAssets>all</PrivateAssets>
-        </PackageReference>
+        <!-- The "mtp-v2" variant pins Microsoft.Testing.Platform v2; the plain
+             xunit.v3 metapackage would pull MTP v1 instead. -->
+        <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+        <!-- Supplies the TRX report option used by CI. -->
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     </ItemGroup>
 
     <ItemGroup>

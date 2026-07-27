@@ -28,8 +28,8 @@ public class DataImportServiceTests(PostgresFixture fixture) : IAsyncLifetime
     private const string ZipTimestamp = "2026-01-01T00:00:00";
     private const string ZipUrl = $"{BaseDownloadUrl}{ZipFileName}";
 
-    public async Task InitializeAsync() => await fixture.ResetAsync();
-    public Task DisposeAsync() => Task.CompletedTask;
+    public async ValueTask InitializeAsync() => await fixture.ResetAsync();
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     private DataImportService BuildService(FakeHttpMessageHandler handler)
     {
