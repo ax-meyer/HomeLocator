@@ -12,13 +12,27 @@ public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLi
     public async Task InitializeAsync() => await fixture.ResetAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
+    /// <summary>
+    /// Property.ImportLogId is a required FK, so every seeded property needs a parent
+    /// import log. Assigning the navigation property lets EF insert both in the right order.
+    /// </summary>
+    private static ImportLog NewImportLog() => new()
+    {
+        DatasetName = "test",
+        FileName = "test.zip",
+        FileTimestamp = "2026-01-01T00:00:00",
+        ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        RecordCount = 0,
+    };
+
     [Fact]
     public async Task GetPropertiesAsync_FilterByPlz_ReturnsMatchingRows()
     {
         await using var context = fixture.CreateContext();
+        var importLog = NewImportLog();
         context.Properties.AddRange(
-            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 200 },
-            new Property { Str = "Bergstraße", Hnr = "5", Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500 }
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 200, ImportLog = importLog },
+            new Property { Str = "Bergstraße", Hnr = "5", Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog }
         );
         await context.SaveChangesAsync();
 
@@ -35,10 +49,11 @@ public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLi
     public async Task GetPropertiesAsync_FilterBySizeRange_ReturnsCorrectSubset()
     {
         await using var context = fixture.CreateContext();
+        var importLog = NewImportLog();
         context.Properties.AddRange(
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 100 },
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500 },
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 1000 }
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 100, ImportLog = importLog },
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog },
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 1000, ImportLog = importLog }
         );
         await context.SaveChangesAsync();
 
