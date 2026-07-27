@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="docker-compose.dcproj" />
+  <Project Path="Grundstuecksfinder/Grundstuecksfinder.csproj" />
+  <Project Path="Grundstuecksfinder.Tests/Grundstuecksfinder.Tests.csproj" />
+</Solution>

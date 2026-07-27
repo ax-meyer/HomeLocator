@@ -1,5 +1,0 @@
-<Solution>
-  <Project Path="docker-compose.dcproj" />
-  <Project Path="HomeLocator/HomeLocator.csproj" />
-  <Project Path="HomeLocator.Tests/HomeLocator.Tests.csproj" />
-</Solution>

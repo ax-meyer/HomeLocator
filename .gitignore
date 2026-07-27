@@ -53,5 +53,5 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
-HomeLocator/HomeLocator.sln.DotSettings.user
+Grundstuecksfinder/Grundstuecksfinder.sln.DotSettings.user
 .DS_Store

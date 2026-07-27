@@ -1,8 +1,8 @@
 services:
   app:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/homelocator:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/grundstuecksfinder:latest
     build:
-      context: ./HomeLocator
+      context: ./Grundstuecksfinder
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -21,10 +21,10 @@ services:
       start_period: 30s
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.homelocator.entrypoints=websecure"
-      - "traefik.http.routers.homelocator.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.homelocator.tls=true"
-      - "traefik.http.services.homelocator.loadbalancer.server.port=8080"
+      - "traefik.http.routers.grundstuecksfinder.entrypoints=websecure"
+      - "traefik.http.routers.grundstuecksfinder.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.grundstuecksfinder.tls=true"
+      - "traefik.http.services.grundstuecksfinder.loadbalancer.server.port=8080"
       # Watchtower: only update this container
       - "com.centurylinklabs.watchtower.enable=true"
     networks:
