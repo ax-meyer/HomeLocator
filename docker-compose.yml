@@ -1,0 +1,59 @@
+services:
+  app:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/grundstuecksfinder:latest
+    build:
+      context: ./Grundstuecksfinder
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=db;Database=homelocator;Username=homelocator;Password=${DB_PASSWORD}"
+    volumes:
+      - dataprotection_keys:/root/.aspnet/DataProtection-Keys
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grundstuecksfinder.entrypoints=websecure"
+      - "traefik.http.routers.grundstuecksfinder.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.grundstuecksfinder.tls=true"
+      - "traefik.http.services.grundstuecksfinder.loadbalancer.server.port=8080"
+      # Watchtower: only update this container
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - web
+      - internal
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homelocator
+      POSTGRES_USER: homelocator
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homelocator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+networks:
+  web:
+    external: true
+  internal:
+    internal: true
+
+volumes:
+  postgres_data:
+  dataprotection_keys:

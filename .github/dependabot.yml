@@ -1,0 +1,47 @@
+version: 2
+
+updates:
+  # NuGet packages. Listed per project directory rather than pointing at the
+  # solution, because Dependabot's NuGet support targets .sln and this repo uses
+  # the newer .slnx format.
+  - package-ecosystem: nuget
+    directories:
+      - /Grundstuecksfinder/Grundstuecksfinder
+      - /Grundstuecksfinder/Grundstuecksfinder.Tests
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Roll the many Microsoft.* / Serilog.* packages up so a routine patch
+      # bump does not open half a dozen separate PRs.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Base images in Grundstuecksfinder/Dockerfile (dotnet/sdk, dotnet/aspnet).
+  - package-ecosystem: docker
+    directory: /Grundstuecksfinder
+    schedule:
+      interval: weekly
+
+  # postgres image in docker-compose.yml / docker-compose.dev.yml. Major bumps
+  # are ignored deliberately: moving Postgres to a new major needs a planned
+  # data migration, not a drive-by PR.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types:
+          - version-update:semver-major

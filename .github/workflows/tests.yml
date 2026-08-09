@@ -1,0 +1,48 @@
+name: Tests
+
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: Grundstuecksfinder
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Grundstuecksfinder.slnx
+
+      - name: Build
+        run: dotnet build Grundstuecksfinder.slnx -c Release --no-restore
+
+      # PropertyServiceIntegrationTests and DataImportServiceTests start a real
+      # PostgreSQL container via Testcontainers, which uses the Docker daemon that
+      # is preinstalled and running on ubuntu-latest runners. No service container
+      # is needed here - Testcontainers manages the container lifecycle itself.
+      # MTP mode of "dotnet test" (selected by test.runner in global.json) takes a
+      # solution via --solution rather than positionally, and uses native MTP
+      # reporting options instead of the VSTest --logger switch.
+      - name: Test
+        run: >
+          dotnet test --solution Grundstuecksfinder.slnx -c Release --no-build
+          --report-trx --report-trx-filename test-results.trx
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          # Paths are relative to the workspace root, not the job working-directory.
+          path: Grundstuecksfinder/TestResults/
+          if-no-files-found: warn
