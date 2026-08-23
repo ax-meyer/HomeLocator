@@ -13,6 +13,10 @@ public class PropertyService(AppDbContext context)
         double? maxFlaeche = null,
         int limit = 500)
     {
+        // A lone minimum is an exact-area search. This keeps the quick entry
+        // "min only" predictable instead of unexpectedly returning every larger parcel.
+        maxFlaeche ??= minFlaeche;
+
         var query = context.Properties.AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(gemeinde))

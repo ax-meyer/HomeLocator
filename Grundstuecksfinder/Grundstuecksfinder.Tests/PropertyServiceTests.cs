@@ -54,10 +54,19 @@ public class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_FilterByMinFlaeche_ExcludesSmallerEntries()
     {
-        var result = await _service.GetPropertiesAsync(plz: "50667", minFlaeche: 500);
+        var result = await _service.GetPropertiesAsync(plz: "50667", minFlaeche: 600);
 
         result.Should().ContainSingle()
             .Which.FlaecheAmtl.Should().Be(600);
+    }
+
+    [Fact]
+    public async Task GetPropertiesAsync_MinFlaecheWithoutMax_TreatsMinAsMax()
+    {
+        var result = await _service.GetPropertiesAsync(plz: "50667", minFlaeche: 300);
+
+        result.Should().ContainSingle()
+            .Which.FlaecheAmtl.Should().Be(300);
     }
 
     [Fact]

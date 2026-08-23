@@ -44,7 +44,8 @@ else
     </div>
     <div class="col-sm-6 col-md-2">
         <RadzenLabel Text="Fläche min (m²)" />
-        <RadzenNumeric @bind-Value="_minFlaeche" class="w-100" TValue="double?" />
+        <RadzenNumeric @bind-Value:get="_minFlaeche" @bind-Value:set="OnMinFlaecheChanged"
+                       class="w-100" TValue="double?" />
     </div>
     <div class="col-sm-6 col-md-2">
         <RadzenLabel Text="Fläche max (m²)" />
@@ -136,6 +137,7 @@ else
             return;
 
         _lastSearchAt = DateTimeOffset.UtcNow;
+        _maxFlaeche ??= _minFlaeche;
         _loading = true;
         _coords.Clear();
         AppMetrics.RecordSearch();
@@ -153,6 +155,12 @@ else
             _gemeinde = _gemeindeOptions[0];
         else if (_gemeinde is not null && !_gemeindeOptions.Contains(_gemeinde))
             _gemeinde = null;
+    }
+
+    private void OnMinFlaecheChanged(double? minFlaeche)
+    {
+        _minFlaeche = minFlaeche;
+        _maxFlaeche ??= minFlaeche;
     }
 
     private async Task OnRowExpand(Property property)
