@@ -91,4 +91,42 @@ public class NrwColumnMapParsingTests
         property!.Str.Should().Be("Bergstraße");
         property.Plz.Should().Be("44139");
     }
+
+    [Fact]
+    public void ParseLine_QuotedSemicolonInLagebeztext_DoesNotShiftAddressColumns()
+    {
+        var cols = new string[44];
+        for (var i = 0; i < cols.Length; i++) cols[i] = "NULL";
+        cols[0] = "9375677";
+        cols[3] = "\"Brockbieke; Up'n Esch\"";
+        cols[4] = "Musterstraße";
+        cols[5] = "42";
+        cols[7] = "50667";
+        cols[8] = "Köln";
+        cols[9] = "Köln";
+        cols[16] = "450.0";
+
+        var property = Parse(string.Join(";", cols));
+
+        property.Should().NotBeNull();
+        property!.Str.Should().Be("Musterstraße");
+        property.Hnr.Should().Be("42");
+        property.Plz.Should().Be("50667");
+        property.Ort.Should().Be("Köln");
+        property.Gemeinde.Should().Be("Köln");
+    }
+
+    [Fact]
+    public void ParseLine_QuotedLagebeztextWithoutAddress_IsRejected()
+    {
+        var cols = new string[44];
+        for (var i = 0; i < cols.Length; i++) cols[i] = "NULL";
+        cols[0] = "9375677";
+        cols[3] = "\"Brockbieke; Up'n Esch\"";
+        cols[9] = "Lienen";
+        cols[10] = "Lienen";
+        cols[11] = "055047";
+
+        Parse(string.Join(";", cols)).Should().BeNull();
+    }
 }
