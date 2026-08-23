@@ -26,7 +26,13 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not configured.");
 
-var dataSource = NpgsqlDataSource.Create(connectionString);
+var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connectionString)
+{
+    // The NRW bulk import completes a multi-million-row COPY operation. Its
+    // acknowledgement may take longer than Npgsql's default 30 seconds.
+    CommandTimeout = 0,
+};
+var dataSource = NpgsqlDataSource.Create(connectionStringBuilder.ConnectionString);
 builder.Services.AddSingleton(dataSource);
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 

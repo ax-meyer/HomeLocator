@@ -95,6 +95,8 @@ public class ImportOrchestrator(
         catch (Exception ex)
         {
             logger.LogError(ex, "Import failed for {Source}/{Name}/{File}", importer.Source, candidate.DatasetName, candidate.FileName);
+            context.ImportLogs.Remove(importLog);
+            await context.SaveChangesAsync(ct);
         }
     }
 }
