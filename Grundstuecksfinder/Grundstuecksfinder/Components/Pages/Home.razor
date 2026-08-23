@@ -30,13 +30,13 @@ else
 <div class="row g-3 mb-4 align-items-end">
     <div class="col-sm-6 col-md-3">
         <RadzenLabel Text="PLZ" />
-        <RadzenDropDown @bind-Value="_plz" Data="@_plzOptions"
+        <RadzenDropDown @bind-Value:get="_plz" @bind-Value:set="OnPlzChanged" Data="@_plzOptions"
                         AllowFiltering="true" AllowClear="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
                         Placeholder="PLZ wählen …" class="w-100" />
     </div>
     <div class="col-sm-6 col-md-3">
-        <RadzenLabel Text="Gemeinde" />
+        <RadzenLabel Text="Stadt / Gemeinde" />
         <RadzenDropDown @bind-Value="_gemeinde" Data="@_gemeindeOptions"
                         AllowFiltering="true" AllowClear="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
@@ -142,6 +142,17 @@ else
         _properties = await PropertyService.GetPropertiesAsync(_gemeinde, _plz, _minFlaeche, _maxFlaeche, MaxResults);
         _searched = true;
         _loading = false;
+    }
+
+    private async Task OnPlzChanged(string? plz)
+    {
+        _plz = plz;
+        _gemeindeOptions = await PropertyService.GetDistinctGemeindenAsync(_plz);
+
+        if (_gemeindeOptions.Count == 1)
+            _gemeinde = _gemeindeOptions[0];
+        else if (_gemeinde is not null && !_gemeindeOptions.Contains(_gemeinde))
+            _gemeinde = null;
     }
 
     private async Task OnRowExpand(Property property)

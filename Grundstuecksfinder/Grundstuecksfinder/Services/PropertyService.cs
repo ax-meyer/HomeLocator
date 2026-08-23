@@ -30,13 +30,20 @@ public class PropertyService(AppDbContext context)
             .ToListAsync();
     }
 
-    public async Task<List<string>> GetDistinctGemeindenAsync() =>
-        await context.Properties
-            .Where(p => p.Gemeinde != null)
+    public async Task<List<string>> GetDistinctGemeindenAsync(string? plz = null)
+    {
+        var query = context.Properties
+            .Where(p => p.Gemeinde != null);
+
+        if (!string.IsNullOrWhiteSpace(plz))
+            query = query.Where(p => p.Plz == plz);
+
+        return await query
             .Select(p => p.Gemeinde!)
             .Distinct()
             .OrderBy(g => g)
             .ToListAsync();
+    }
 
     public async Task<List<string>> GetDistinctPlzAsync() =>
         await context.Properties

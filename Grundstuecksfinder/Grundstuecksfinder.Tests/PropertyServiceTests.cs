@@ -70,6 +70,14 @@ public class PropertyServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetDistinctGemeindenAsync_WithPlz_ReturnsOnlyMatchingMunicipalities()
+    {
+        var result = await _service.GetDistinctGemeindenAsync("44139");
+
+        result.Should().ContainSingle().Which.Should().Be("Dortmund");
+    }
+
+    [Fact]
     public async Task GetPropertiesAsync_CombinedFilters_ApplyAll()
     {
         var result = await _service.GetPropertiesAsync(
