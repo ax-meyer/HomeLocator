@@ -47,17 +47,8 @@ pipeline {
                     sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=no \
                         docker-compose.yml .env.example \
                         "$USERNAME@$REMOTE_HOST:$REMOTE_PATH/"
-                    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" 'bash -s' <<'REMOTE_SCRIPT'
-                        cd $REMOTE_PATH
-                        test -f .env || cp .env.example .env
-                        sed -i "s#^EXTERNAL_PORT=.*#EXTERNAL_PORT=$EXTERNAL_PORT#" .env
-                        sed -i "s#^DOCKER_NETWORK=.*#DOCKER_NETWORK=$DOCKER_NETWORK#" .env
-                        # Set a random DB password on first deploy only.
-                        if grep -q '^DB_PASSWORD=changeme' .env; then
-                            pass=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 24)
-                            sed -i "s#^DB_PASSWORD=.*#DB_PASSWORD=$pass#" .env
-                        fi
-REMOTE_SCRIPT
+                    echo "cd $REMOTE_PATH && test -f .env || cp .env.example .env && sed -i \"s#^EXTERNAL_PORT=.*#EXTERNAL_PORT=$EXTERNAL_PORT#\" .env && sed -i \"s#^DOCKER_NETWORK=.*#DOCKER_NETWORK=$DOCKER_NETWORK#\" .env && if grep -q '^DB_PASSWORD=changeme' .env; then pass=\\$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 24); sed -i \"s#^DB_PASSWORD=.*#DB_PASSWORD=\\$pass#\" .env; fi" \
+                        | sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" bash -s
                     '''
                 }
             }
@@ -79,12 +70,8 @@ REMOTE_SCRIPT
             steps {
                 withCredentials([usernamePassword(credentialsId: '5b17f8ac-9503-436b-ae6d-387119dc9fe3', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                     sh '''
-                    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" 'bash -s' <<'REMOTE_SCRIPT'
-                        cd $REMOTE_PATH
-                        docker network inspect $DOCKER_NETWORK >/dev/null 2>&1 || docker network create $DOCKER_NETWORK
-                        docker compose up -d --no-build --force-recreate $SERVICE_NAME db
-                        docker compose ps
-REMOTE_SCRIPT
+                    echo "cd $REMOTE_PATH && docker network inspect $DOCKER_NETWORK >/dev/null 2>&1 || docker network create $DOCKER_NETWORK && docker compose up -d --no-build --force-recreate $SERVICE_NAME db && docker compose ps" \
+                        | sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" bash -s
                     '''
                 }
             }
@@ -93,13 +80,8 @@ REMOTE_SCRIPT
             steps {
                 withCredentials([usernamePassword(credentialsId: '5b17f8ac-9503-436b-ae6d-387119dc9fe3', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                     sh '''
-                    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" \
-                        'for attempt in $(seq 1 12); do
-                            curl --fail --silent http://127.0.0.1:8085/health && exit 0
-                            sleep 5
-                        done
-                        docker logs --tail 100 homelocator
-                        exit 1'
+                    echo "for attempt in \\$(seq 1 20); do curl --fail --silent http://127.0.0.1:$EXTERNAL_PORT/health && exit 0; sleep 5; done; docker logs --tail 100 homelocator; exit 1" \
+                        | sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$REMOTE_HOST" bash -s
                     '''
                 }
             }
