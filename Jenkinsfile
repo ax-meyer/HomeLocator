@@ -27,7 +27,7 @@ pipeline {
         }
         stage('Build Image') {
             steps {
-                sh 'docker build --platform linux/amd64 -t ${IMAGE_NAME}:${IMAGE_TAG} .'
+                sh 'docker build --platform linux/amd64 -f Grundstuecksfinder/Dockerfile -t ${IMAGE_NAME}:${IMAGE_TAG} .'
             }
         }
         stage('Prepare Remote Directories') {
