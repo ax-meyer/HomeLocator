@@ -17,10 +17,10 @@
     <ItemGroup>
         <PackageReference Include="FakeItEasy" Version="9.0.1" />
         <PackageReference Include="FluentAssertions" Version="8.10.0" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-        <PackageReference Include="Testcontainers.PostgreSql" Version="4.13.0" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+        <PackageReference Include="Testcontainers.PostgreSql" Version="4.15.0" />
         <!-- The "mtp-v2" variant pins Microsoft.Testing.Platform v2; the plain
              xunit.v3 metapackage would pull MTP v1 instead. -->
         <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
