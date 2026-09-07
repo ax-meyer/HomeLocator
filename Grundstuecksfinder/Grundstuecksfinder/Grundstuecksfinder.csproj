@@ -12,11 +12,11 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
         </PackageReference>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.10">
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.11">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
         </PackageReference>
@@ -26,9 +26,9 @@
              resolves the lower version the Npgsql provider pulls, which was
              both an MSB3277 conflict warning and a runtime
              FileNotFoundException. -->
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-        <PackageReference Include="Radzen.Blazor" Version="11.2.1" />
+        <PackageReference Include="Radzen.Blazor" Version="11.3.2" />
         <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
         <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
         <PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0" />
