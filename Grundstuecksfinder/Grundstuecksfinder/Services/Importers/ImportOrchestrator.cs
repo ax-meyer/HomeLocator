@@ -61,6 +61,8 @@ public partial class ImportOrchestrator(
         }
     }
 
+    private const int MaxErrorLength = 2000;
+
     private async Task ImportCandidateAsync(
         IPropertyImporter importer, ImportCandidate candidate, ImportLog? failedEarlier, AppDbContext context, CancellationToken ct)
     {
@@ -75,22 +77,23 @@ public partial class ImportOrchestrator(
         }).Entity;
         importLog.ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         importLog.RecordCount = 0;
+        importLog.LastError = null;
         await context.SaveChangesAsync(ct);
 
         try
         {
             LogImporting(logger, importer.Source, candidate.DatasetName, candidate.FileName);
 
+            // Marks the ImportLog completed in the same transaction that swaps the rows in.
             var count = await bulkWriter.WriteAsync(importer.Source, importer.FetchAsync(candidate, ct), importLog.Id, ct);
-
-            importLog.RecordCount = count;
-            importLog.CompletedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            await context.SaveChangesAsync(ct);
             LogImportComplete(logger, importer.Source, count);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             LogImportFailed(logger, ex, importer.Source, candidate.DatasetName, candidate.FileName);
+            // Surfaced by the import health check until a later attempt succeeds.
+            importLog.LastError = ex.Message.Length <= MaxErrorLength ? ex.Message : ex.Message[..MaxErrorLength];
+            await context.SaveChangesAsync(ct);
         }
     }
 

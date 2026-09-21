@@ -35,6 +35,7 @@ public sealed class InspirePropertyImporterTests
             PageSize = 1000,
             MaxAttempts = 3,
             RetryBaseDelaySeconds = 0,
+            MaxRetryDelaySeconds = 0,
         };
         tweak?.Invoke(options);
         return options;
@@ -190,7 +191,7 @@ public sealed class InspirePropertyImporterTests
 
         var act = () => FetchAllAsync(Importer(server, Options()));
 
-        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*EPSG:4258*");
+        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*epsg/0/4258 instead of EPSG:25832*");
     }
 
     [Fact]
@@ -228,6 +229,117 @@ public sealed class InspirePropertyImporterTests
         await act.Should().ThrowAsync<InspireImportException>().WithMessage("*minimum tile size*");
     }
 
+    private static bool IsAddressGetFeature(Uri uri) =>
+        uri.ToString().StartsWith(FakeWfsServer.AddressUrl, StringComparison.Ordinal) && uri.Query.Contains("bbox=");
+
+    private static HttpResponseMessage XmlOk(string body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "text/xml"),
+    };
+
+    [Fact]
+    public async Task FetchAsync_ExceptionReportWithStatus200_IsRetriedNotTakenAsEmptyTile()
+    {
+        var server = GridServer(2);
+        var served = 0;
+        server.Interceptor = (uri, _) => IsAddressGetFeature(uri) && served++ == 0
+            ? XmlOk("""<ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1"><ows:Exception><ows:ExceptionText>Server overloaded</ows:ExceptionText></ows:Exception></ows:ExceptionReport>""")
+            : null;
+
+        var rows = await FetchAllAsync(Importer(server, Options()));
+
+        rows.Should().HaveCount(4);
+        served.Should().Be(2, "the error document must have been retried");
+    }
+
+    [Fact]
+    public async Task FetchAsync_ErrorDocumentEveryTime_FailsTheImport()
+    {
+        var server = GridServer(2);
+        server.Interceptor = (uri, _) => IsAddressGetFeature(uri)
+            ? XmlOk("""<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0"><wfs:truncatedResponse/></wfs:FeatureCollection>""")
+            : null;
+
+        var act = () => FetchAllAsync(Importer(server, Options()));
+
+        await act.Should().ThrowAsync<WfsResponseException>().WithMessage("*truncated*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_ServerStallsMidBody_TimesOutAndRetries()
+    {
+        var server = GridServer(2);
+        var stalled = false;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!IsAddressGetFeature(uri) || stalled) return null;
+            stalled = true;
+            // Headers arrive, then the body never does: HttpClient.Timeout wouldn't catch this.
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) };
+        };
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.RequestTimeoutSeconds = 0.5)));
+
+        stalled.Should().BeTrue();
+        rows.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task FetchAsync_TooManyRequestsWithRetryAfter_IsRetried()
+    {
+        var server = GridServer(2);
+        var throttled = false;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!IsAddressGetFeature(uri) || throttled) return null;
+            throttled = true;
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+            return response; // MaxRetryDelaySeconds = 0 in these tests caps the wait
+        };
+
+        var rows = await FetchAllAsync(Importer(server, Options()));
+
+        rows.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task FetchAsync_UnrecognisedSrsName_FailsTheImport()
+    {
+        var server = GridServer(2);
+        server.ResponseSrsName = "urn:x-custom:crs:local";
+
+        var act = () => FetchAllAsync(Importer(server, Options()));
+
+        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*urn:x-custom:crs:local*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_AdvSrsNameOfTheSameCrs_IsAccepted()
+    {
+        var server = GridServer(2);
+        server.ResponseSrsName = "urn:adv:crs:ETRS89_UTM32";
+
+        var rows = await FetchAllAsync(Importer(server, Options()));
+
+        rows.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task FetchAsync_OnlyAddressPageFull_ReusesTheParcelsInsteadOfRefetching()
+    {
+        var server = new FakeWfsServer();
+        server.Parcels.Add(new FakeParcel("P1", 0, 0, 100, 100, 10_000)); // one big parcel
+        for (var i = 0; i < 40; i++)
+            server.Addresses.Add(new FakeAddress($"A{i:D2}", 1 + i * 2.4, 1 + i * 2.4, "Hofweg", $"{i}"));
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.PageSize = 10)));
+
+        rows.Should().HaveCount(40);
+        server.GetFeatureRequests(FakeWfsServer.ParcelUrl).Should().ContainSingle(
+            "the parcel page wasn't full, so split tiles reuse it");
+    }
+
     [Fact]
     public async Task DiscoverAsync_VersionCombinesCountsAndMonth()
     {
@@ -263,6 +375,30 @@ public sealed class InspirePropertyImporterTests
             """);
 
         InspirePropertyImporter.ParseCountDefault(capabilities).Should().Be(10000);
+    }
+
+    /// <summary>A response body that never delivers a byte until the read is cancelled.</summary>
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

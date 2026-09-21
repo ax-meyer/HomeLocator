@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Grundstuecksfinder.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260921200744_AddImportCompletionAndStaging")]
+    [Migration("20260921203516_AddImportCompletionAndStaging")]
     partial class AddImportCompletionAndStaging
     {
         /// <inheritdoc />
@@ -72,6 +72,9 @@ namespace Grundstuecksfinder.Migrations
 
                     b.Property<long>("ImportedAt")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
 
                     b.Property<long>("RecordCount")
                         .HasColumnType("bigint");

@@ -59,11 +59,23 @@ public partial class InspireSourceOptions
     /// </summary>
     public bool IsCityState { get; set; }
 
-    /// <summary>Attempts per WFS request (timeouts, 5xx, broken responses) before the import fails.</summary>
-    public int MaxAttempts { get; set; } = 4;
+    /// <summary>
+    /// Limit for one WFS request including reading and parsing the whole response. Covers what
+    /// HttpClient.Timeout doesn't when streaming: a server stalling mid-body.
+    /// </summary>
+    public double RequestTimeoutSeconds { get; set; } = 300;
 
-    /// <summary>Wait before the first retry; doubles with every further attempt.</summary>
-    public double RetryBaseDelaySeconds { get; set; } = 5;
+    /// <summary>Attempts per WFS request (timeouts, 5xx, broken responses) before the import fails.</summary>
+    public int MaxAttempts { get; set; } = 6;
+
+    /// <summary>
+    /// Wait before the first retry; doubles with every further attempt (with jitter), up to
+    /// <see cref="MaxRetryDelaySeconds"/>. The defaults ride out about five minutes of outage.
+    /// </summary>
+    public double RetryBaseDelaySeconds { get; set; } = 10;
+
+    /// <summary>Upper bound for one retry wait, including a server's Retry-After.</summary>
+    public double MaxRetryDelaySeconds { get; set; } = 300;
 
     /// <summary>
     /// Minimum share of the address service's reported total that must have been fetched, or
@@ -82,13 +94,18 @@ public partial class InspireSourceOptions
 
     /// <summary>
     /// Extracts the EPSG code from any of the srsName forms WFS servers use:
-    /// "urn:ogc:def:crs:EPSG::25832", "http://www.opengis.net/def/crs/epsg/0/25832", "EPSG:25832".
+    /// "urn:ogc:def:crs:EPSG::25832", "http://www.opengis.net/def/crs/epsg/0/25832", "EPSG:25832",
+    /// and the German AdV names "urn:adv:crs:ETRS89_UTM32" (also with a height suffix, like
+    /// "ETRS89_UTM32*DE_DHHN2016_NH"), whose horizontal part is EPSG 25831–25833.
     /// </summary>
     public static int? ParseEpsgCode(string? srsName)
     {
         if (string.IsNullOrWhiteSpace(srsName)) return null;
         var match = EpsgCodePattern().Match(srsName.Trim());
-        return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
+        if (match.Success) return int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+
+        var adv = AdvUtmPattern().Match(srsName);
+        return adv.Success ? 25800 + int.Parse(adv.Groups[1].Value, CultureInfo.InvariantCulture) : null;
     }
 
     /// <summary>
@@ -125,8 +142,10 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: PageSize must be positive.");
             if (s.MaxAttempts < 1)
                 errors.Add($"{name}: MaxAttempts must be at least 1.");
-            if (s.RetryBaseDelaySeconds < 0)
-                errors.Add($"{name}: RetryBaseDelaySeconds must not be negative.");
+            if (!(s.RequestTimeoutSeconds > 0))
+                errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
+            if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)
+                errors.Add($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds.");
             if (s.MinCompleteness is < 0 or > 1)
                 errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
             if (s.MaxUnmatchedRatio is < 0 or > 1)
@@ -140,6 +159,9 @@ public partial class InspireSourceOptions
 
     [GeneratedRegex(@"epsg(?:::|:|/0/|/)(\d+)$", RegexOptions.IgnoreCase)]
     private static partial Regex EpsgCodePattern();
+
+    [GeneratedRegex(@"ETRS89_UTM(3[1-3])(?!\d)", RegexOptions.IgnoreCase)]
+    private static partial Regex AdvUtmPattern();
 
     [GeneratedRegex("^[a-z0-9-]+$")]
     private static partial Regex SourcePattern();

@@ -8,6 +8,7 @@ using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Nrw;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Npgsql;
 using Serilog;
 
@@ -52,9 +53,10 @@ builder.Services.AddSingleton(new DisabledSources(
     inspireSources.Where(s => !s.Enabled).Select(s => s.Source)
         .Concat(nrwEnabled ? [] : [NrwPropertyImporter.SourceId])
         .ToList()));
+// Each request (headers, body and parsing) is bounded by the source's RequestTimeoutSeconds
+// instead: HttpClient.Timeout stops counting once the headers arrive.
 builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
-    // Big GetFeature responses from slow servers can take minutes; retries handle the rest.
-    client.Timeout = TimeSpan.FromMinutes(5));
+    client.Timeout = Timeout.InfiniteTimeSpan);
 foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
     builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(
@@ -63,7 +65,9 @@ foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
         inspireSource));
 }
 
-builder.Services.AddScoped<PropertyBulkWriter>();
+var minRetainedRatio = builder.Configuration.GetValue("Import:MinRetainedRatio", PropertyBulkWriter.DefaultMinRetainedRatio);
+builder.Services.AddScoped(sp => new PropertyBulkWriter(
+    sp.GetRequiredService<NpgsqlDataSource>(), sp.GetRequiredService<ILogger<PropertyBulkWriter>>(), minRetainedRatio));
 builder.Services.AddScoped<ImportOrchestrator>();
 builder.Services.AddHostedService<ImportWorker>();
 
@@ -83,7 +87,8 @@ builder.Services.AddScoped<PropertyService>();
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks()
-    .AddCheck<DatabaseHealthCheck>("database");
+    .AddCheck<DatabaseHealthCheck>("database")
+    .AddCheck<ImportHealthCheck>("imports", failureStatus: HealthStatus.Degraded);
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 builder.Services.AddRateLimiter(options =>

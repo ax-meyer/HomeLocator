@@ -41,6 +41,7 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         PageSize = 1000,
         MaxAttempts = 2,
         RetryBaseDelaySeconds = 0,
+        MaxRetryDelaySeconds = 0,
     };
 
     private static FakeWfsServer TwoParcelServer()

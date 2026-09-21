@@ -26,9 +26,9 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// and, if that request comes back full, split into four smaller tiles.
 /// </para>
 /// <para>
-/// Any failure — a request still failing after retries, a response in the wrong CRS, too few
-/// addresses overall, too many without a parcel — throws, so the writer never swaps in partial
-/// data and the source's previous rows stay.
+/// Any failure — a request still failing after retries, an error document instead of features,
+/// a response in the wrong CRS, too few addresses overall, too many without a parcel — throws,
+/// so the writer never swaps in partial data and the source's previous rows stay.
 /// </para>
 /// </remarks>
 public partial class InspirePropertyImporter(
@@ -37,7 +37,7 @@ public partial class InspirePropertyImporter(
     InspireSourceOptions options,
     TimeProvider? timeProvider = null) : IPropertyImporter
 {
-    /// <summary>Named HttpClient with a timeout long enough for big GetFeature responses.</summary>
+    /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
     public const string HttpClientName = "Inspire";
 
     private const string ParcelType = "cp:CadastralParcel";
@@ -89,44 +89,54 @@ public partial class InspirePropertyImporter(
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
 
-        var expectedAddresses = await WithRetryAsync(
-            token => GetHitsAsync(http, options.AddressWfsUrl, AddressType, token), AddressType, "hits", ct)
+        var expectedAddresses = await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct)
             ?? throw new InspireImportException($"{Source}: the address service no longer reports a feature count.");
 
         var parcelLimit = await GetPageLimitAsync(http, options.ParcelWfsUrl, ct);
         var addressLimit = await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
 
-        var pending = new Stack<Tile>(InitialTiles().Reverse());
+        // A tile may carry its parcels along: when only the address page of a tile was full, its
+        // (complete) parcel page is filtered down to the child tiles instead of fetched again.
+        var pending = new Stack<(Tile Tile, IReadOnlyList<ParcelFeature>? Parcels)>(
+            InitialTiles().Reverse().Select(t => (t, (IReadOnlyList<ParcelFeature>?)null)));
         LogFetchingTiles(logger, Source, pending.Count, parcelLimit, addressLimit);
 
         long addressCount = 0;
         long unmatchedCount = 0;
         var processedTiles = 0;
-        while (pending.TryPop(out var tile))
+        while (pending.TryPop(out var item))
         {
             ct.ThrowIfCancellationRequested();
+            var tile = item.Tile;
             if (++processedTiles % ProgressLogInterval == 0)
                 LogProgress(logger, Source, processedTiles, pending.Count, addressCount);
 
-            var parcels = await FetchPageAsync(http, options.ParcelWfsUrl, ParcelType, tile, parcelLimit,
-                WfsGmlParser.ParseCadastralParcels, ct);
-            if (parcels.MemberCount >= parcelLimit)
+            var parcels = item.Parcels;
+            if (parcels is null)
             {
-                Split(tile, pending);
-                continue;
+                var parcelPage = await FetchPageAsync(http, options.ParcelWfsUrl, ParcelType, tile, parcelLimit,
+                    WfsGmlParser.ParseCadastralParcels, ct);
+                if (parcelPage.MemberCount >= parcelLimit)
+                {
+                    foreach (var child in Split(tile))
+                        pending.Push((child, null));
+                    continue;
+                }
+                parcels = parcelPage.Features;
             }
-            if (parcels.Features.Count == 0) continue;
+            if (parcels.Count == 0) continue;
 
             var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
                 doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState), ct);
             if (addresses.MemberCount >= addressLimit)
             {
-                Split(tile, pending);
+                foreach (var child in Split(tile))
+                    pending.Push((child, parcels.Where(p => child.Intersects(p.Geometry.EnvelopeInternal)).ToList()));
                 continue;
             }
 
             var index = new ParcelSpatialIndex();
-            foreach (var parcel in parcels.Features)
+            foreach (var parcel in parcels)
                 index.Add(parcel.Geometry, parcel.AreaM2);
 
             foreach (var address in addresses.Features)
@@ -156,11 +166,12 @@ public partial class InspirePropertyImporter(
             }
         }
 
-        LogUnmatchedAddresses(logger, Source, unmatchedCount, addressCount, expectedAddresses);
+        var completeness = expectedAddresses == 0 ? 1 : (double)addressCount / expectedAddresses;
+        LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount);
 
-        if (addressCount < options.MinCompleteness * expectedAddresses)
+        if (completeness < options.MinCompleteness)
             throw new InspireImportException(FormattableString.Invariant(
-                $"{Source}: fetched only {addressCount} of {expectedAddresses} addresses (minimum {options.MinCompleteness:P0}); keeping the previous data."));
+                $"{Source}: fetched only {addressCount} of {expectedAddresses} addresses ({completeness:P1}, minimum {options.MinCompleteness:P0}); keeping the previous data."));
 
         if (addressCount > 0 && (double)unmatchedCount / addressCount > options.MaxUnmatchedRatio)
             throw new InspireImportException(FormattableString.Invariant(
@@ -181,19 +192,24 @@ public partial class InspirePropertyImporter(
         }
     }
 
-    private void Split(Tile tile, Stack<Tile> pending)
+    /// <summary>The four quarters of a full tile, in the order they should be pushed.</summary>
+    private Tile[] Split(Tile tile)
     {
-        var midX = (tile.MinX + tile.MaxX) / 2;
-        var midY = (tile.MinY + tile.MaxY) / 2;
         if (Math.Max(tile.MaxX - tile.MinX, tile.MaxY - tile.MinY) / 2 < options.MinTileSizeMeters)
             throw new InspireImportException(
                 $"{Source}: tile {tile.Bbox} is still full at the minimum tile size; features would be lost.");
 
         LogSplitTile(logger, Source, tile.Bbox);
-        pending.Push(new Tile(midX, midY, tile.MaxX, tile.MaxY));
-        pending.Push(new Tile(tile.MinX, midY, midX, tile.MaxY));
-        pending.Push(new Tile(midX, tile.MinY, tile.MaxX, midY));
-        pending.Push(new Tile(tile.MinX, tile.MinY, midX, midY));
+        var midX = (tile.MinX + tile.MaxX) / 2;
+        var midY = (tile.MinY + tile.MaxY) / 2;
+        // Pushed onto a stack, so the reverse of the order they'll be processed in.
+        return
+        [
+            new Tile(midX, midY, tile.MaxX, tile.MaxY),
+            new Tile(tile.MinX, midY, midX, tile.MaxY),
+            new Tile(midX, tile.MinY, tile.MaxX, midY),
+            new Tile(tile.MinX, tile.MinY, midX, midY),
+        ];
     }
 
     private async Task<WfsPage<T>> FetchPageAsync<T>(
@@ -209,17 +225,17 @@ public partial class InspirePropertyImporter(
 
         var page = await WithRetryAsync(async token =>
         {
-            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(token);
-            return parse(await XDocument.LoadAsync(stream, LoadOptions.None, token));
+            var doc = await GetXmlAsync(http, url, token);
+            EnsureCompleteFeatureCollection(doc, url);
+            return parse(doc);
         }, typeName, tile.Bbox, ct);
 
+        // Unrecognised srsNames count as foreign too: an unchecked CRS could silently misjoin.
         var expectedEpsg = options.CrsEpsgCode;
-        var foreign = page.EpsgCodes.Where(code => code != expectedEpsg).ToList();
+        var foreign = page.SrsNames.Where(name => InspireSourceOptions.ParseEpsgCode(name) != expectedEpsg).ToList();
         if (foreign.Count > 0)
-            throw new InspireImportException(FormattableString.Invariant(
-                $"{Source}: {typeName} answered in EPSG:{string.Join(", EPSG:", foreign)} instead of EPSG:{expectedEpsg}."));
+            throw new InspireImportException(
+                $"{Source}: {typeName} answered in {string.Join(", ", foreign)} instead of EPSG:{expectedEpsg}.");
 
         return page;
     }
@@ -234,14 +250,8 @@ public partial class InspirePropertyImporter(
         var url = $"{baseUrl}?service=WFS&version=2.0.0&request=GetCapabilities";
         try
         {
-            var serverLimit = await WithRetryAsync(async token =>
-            {
-                using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
-                response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync(token);
-                var doc = await XDocument.LoadAsync(stream, LoadOptions.None, token);
-                return ParseCountDefault(doc);
-            }, "GetCapabilities", baseUrl, ct);
+            var serverLimit = await WithRetryAsync(
+                async token => ParseCountDefault(await GetXmlAsync(http, url, token)), "GetCapabilities", baseUrl, ct);
 
             return serverLimit is > 0 && serverLimit < options.PageSize ? (int)serverLimit : options.PageSize;
         }
@@ -263,47 +273,97 @@ public partial class InspirePropertyImporter(
         return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) ? limit : null;
     }
 
-    private static async Task<long?> GetHitsAsync(HttpClient http, string baseUrl, string typeName, CancellationToken ct)
+    private async Task<long?> GetHitsAsync(HttpClient http, string baseUrl, string typeName, CancellationToken ct)
     {
         var url = FormattableString.Invariant(
             $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames={Uri.EscapeDataString(typeName)}&resultType=hits");
-        using var response = await http.GetAsync(url, ct);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        var doc = await XDocument.LoadAsync(stream, LoadOptions.None, ct);
-        var attr = doc.Root?.Attributes().FirstOrDefault(a => a.Name.LocalName == "numberMatched")?.Value;
-        return long.TryParse(attr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+        return await WithRetryAsync(async token =>
+        {
+            var doc = await GetXmlAsync(http, url, token);
+            EnsureCompleteFeatureCollection(doc, url);
+            var attr = doc.Root!.Attributes().FirstOrDefault(a => a.Name.LocalName == "numberMatched")?.Value;
+            return long.TryParse(attr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : (long?)null;
+        }, typeName, "hits", ct);
     }
+
+    private static async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
+    {
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var retryAfter = response.Headers.RetryAfter is { } header
+                ? header.Delta ?? (header.Date - DateTimeOffset.UtcNow)
+                : null;
+            throw new WfsHttpException(response.StatusCode, retryAfter, url);
+        }
+        // Buffer first: CopyToAsync passes the token to every read, so the per-attempt timeout
+        // can abort a body that stalls. XDocument.LoadAsync doesn't hand its token to the
+        // stream, so parsing straight from the network could hang forever.
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var body = new MemoryStream();
+        await stream.CopyToAsync(body, ct);
+        body.Position = 0;
+        return await XDocument.LoadAsync(body, LoadOptions.None, ct);
+    }
+
+    /// <summary>
+    /// Servers answer errors (overload, internal exceptions) with an ows:ExceptionReport or a
+    /// truncated collection, often with HTTP 200. Parsed as-is that would be an empty tile.
+    /// </summary>
+    private static void EnsureCompleteFeatureCollection(XDocument doc, string url)
+    {
+        var root = doc.Root!;
+        if (root.Name.LocalName != "FeatureCollection")
+            throw new WfsResponseException($"Expected a FeatureCollection but got {root.Name.LocalName} from {url}: {Truncate(root.Value)}");
+        if (root.Elements().Any(e => e.Name.LocalName == "truncatedResponse"))
+            throw new WfsResponseException($"The server truncated its response to {url}.");
+    }
+
+    private static string Truncate(string text) => text.Length <= 300 ? text.Trim() : text[..300].Trim() + "…";
 
     private async Task<T> WithRetryAsync<T>(
         Func<CancellationToken, Task<T>> action, string what, string where, CancellationToken ct)
     {
         for (var attempt = 1; ; attempt++)
         {
+            // HttpClient.Timeout ends once the headers arrive; this also bounds reading and
+            // parsing the body, so a server stalling mid-response can't hang the import.
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            attemptCts.CancelAfter(TimeSpan.FromSeconds(options.RequestTimeoutSeconds));
             try
             {
-                return await action(ct);
+                return await action(attemptCts.Token);
             }
             catch (Exception ex) when (attempt < options.MaxAttempts && !ct.IsCancellationRequested && IsTransient(ex))
             {
-                var delay = TimeSpan.FromSeconds(options.RetryBaseDelaySeconds * Math.Pow(2, attempt - 1));
+                var delay = RetryDelay(attempt, (ex as WfsHttpException)?.RetryAfter);
                 LogRetrying(logger, ex, Source, what, where, attempt, options.MaxAttempts, delay);
-                await Task.Delay(delay, ct);
+                await Task.Delay(delay, _time, ct);
             }
         }
     }
 
     /// <summary>
-    /// Network errors, timeouts (an OperationCanceledException from HttpClient that the caller
-    /// didn't ask for), truncated or garbled bodies, 5xx, 408 and 429 are worth retrying; other
-    /// 4xx mean the request itself is wrong.
+    /// Exponential backoff with ±20% jitter, at least the server's Retry-After, at most
+    /// <see cref="InspireSourceOptions.MaxRetryDelaySeconds"/>.
+    /// </summary>
+    private TimeSpan RetryDelay(int attempt, TimeSpan? retryAfter)
+    {
+        var backoff = options.RetryBaseDelaySeconds * Math.Pow(2, attempt - 1) * (0.8 + 0.4 * Random.Shared.NextDouble());
+        var seconds = Math.Max(backoff, retryAfter?.TotalSeconds ?? 0);
+        return TimeSpan.FromSeconds(Math.Min(seconds, options.MaxRetryDelaySeconds));
+    }
+
+    /// <summary>
+    /// Network errors, timeouts (an OperationCanceledException the caller didn't ask for),
+    /// truncated, garbled or error-document bodies, 5xx, 408 and 429 are worth retrying; other
+    /// 4xx mean the request itself is wrong. Only GETs are ever retried.
     /// </summary>
     private static bool IsTransient(Exception ex) => ex switch
     {
-        HttpRequestException { StatusCode: null } => true,
-        HttpRequestException { StatusCode: var status } =>
+        WfsHttpException { StatusCode: var status } =>
             (int)status! >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests,
-        OperationCanceledException or IOException or XmlException => true,
+        HttpRequestException or OperationCanceledException or IOException or XmlException or WfsResponseException => true,
         _ => false,
     };
 
@@ -314,6 +374,9 @@ public partial class InspirePropertyImporter(
 
         /// <summary>Half-open, so each point belongs to exactly one of two adjacent tiles.</summary>
         public bool Owns(Point p) => p.X >= MinX && p.X < MaxX && p.Y >= MinY && p.Y < MaxY;
+
+        /// <summary>Closed, like the WFS bbox filter: what a request for this tile would return.</summary>
+        public bool Intersects(Envelope e) => e.MinX <= MaxX && e.MaxX >= MinX && e.MinY <= MaxY && e.MaxY >= MinY;
     }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to check feature counts for {Source}")]
@@ -340,8 +403,8 @@ public partial class InspirePropertyImporter(
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't read the page-size limit from {Url}'s capabilities; using the configured PageSize")]
     private static partial void LogCapabilitiesFailed(ILogger logger, Exception exception, string source, string url);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: {Unmatched}/{Total} fetched addresses had no containing parcel; server reports {Expected} addresses")]
-    private static partial void LogUnmatchedAddresses(ILogger logger, string source, long unmatched, long total, long expected);
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: fetched {Fetched} of {Expected} addresses ({Completeness:P1}); {Unmatched} had no containing parcel")]
+    private static partial void LogFetchSummary(ILogger logger, string source, long fetched, long expected, double completeness, long unmatched);
 }
 
 /// <summary>
@@ -349,3 +412,13 @@ public partial class InspirePropertyImporter(
 /// can't be fetched completely). Not retried; the import fails and the previous data stays.
 /// </summary>
 public sealed class InspireImportException(string message) : Exception(message);
+
+/// <summary>A WFS request answered with a non-success status, and the server's Retry-After if any.</summary>
+public sealed class WfsHttpException(HttpStatusCode statusCode, TimeSpan? retryAfter, string url)
+    : HttpRequestException($"{(int)statusCode} {statusCode} from {url}", null, statusCode)
+{
+    public TimeSpan? RetryAfter { get; } = retryAfter;
+}
+
+/// <summary>A WFS answered with something other than a complete FeatureCollection. Retried.</summary>
+public sealed class WfsResponseException(string message) : Exception(message);

@@ -20,6 +20,8 @@ public sealed class InspireSourceOptionsTests
     [InlineData("urn:ogc:def:crs:EPSG::25832", 25832)]
     [InlineData("http://www.opengis.net/def/crs/epsg/0/25833", 25833)]
     [InlineData("EPSG:4258", 4258)]
+    [InlineData("urn:adv:crs:ETRS89_UTM32", 25832)]
+    [InlineData("urn:adv:crs:ETRS89_UTM33*DE_DHHN2016_NH", 25833)]
     [InlineData("urn:ogc:def:crs:OGC:1.3:CRS84", null)]
     [InlineData("", null)]
     public void ParseEpsgCode_UnderstandsEverySrsNameForm(string srsName, int? expected) =>

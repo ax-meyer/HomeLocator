@@ -151,7 +151,7 @@ public class WfsGmlParserTests
 
         page.Features.Should().HaveCount(2);
         page.MemberCount.Should().Be(3, "a full page must be recognised even if a feature on it is malformed");
-        page.EpsgCodes.Should().Equal(25832);
+        page.SrsNames.Should().Equal("http://www.opengis.net/def/crs/epsg/0/25832");
     }
 
     [Fact]

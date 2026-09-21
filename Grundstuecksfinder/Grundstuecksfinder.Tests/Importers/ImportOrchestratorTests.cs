@@ -135,6 +135,9 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().Equal(["Alt"], "a failed import must not replace the previous data");
+            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            failed.CompletedAt.Should().BeNull();
+            failed.LastError.Should().Contain("upstream failed midway");
         }
 
         var fixedImporter = new StubPropertyImporter("a", "ds", "file", "v2",
@@ -145,6 +148,9 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().BeEquivalentTo(["Neu 1", "Neu 2"], "the failed version is retried, not skipped as already imported");
+            var retried = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            retried.CompletedAt.Should().NotBeNull();
+            retried.LastError.Should().BeNull();
         }
     }
 

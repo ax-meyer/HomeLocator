@@ -70,6 +70,9 @@ namespace Grundstuecksfinder.Migrations
                     b.Property<long>("ImportedAt")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
                     b.Property<long>("RecordCount")
                         .HasColumnType("bigint");
 

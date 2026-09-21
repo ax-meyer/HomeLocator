@@ -10,9 +10,9 @@ public sealed record ParcelFeature(Geometry Geometry, double AreaM2);
 /// <summary>
 /// One parsed GetFeature response. <see cref="MemberCount"/> counts every returned feature,
 /// including ones the parser skipped as malformed, so "the page is full" can be judged
-/// against the requested count. <see cref="EpsgCodes"/> are the CRSs the geometries claim.
+/// against the requested count. <see cref="SrsNames"/> are the CRSs the geometries claim.
 /// </summary>
-public sealed record WfsPage<T>(IReadOnlyList<T> Features, int MemberCount, IReadOnlySet<int> EpsgCodes);
+public sealed record WfsPage<T>(IReadOnlyList<T> Features, int MemberCount, IReadOnlySet<string> SrsNames);
 
 /// <summary>
 /// Parses cp:CadastralParcel and ad:Address WFS GetFeature GML responses. Matches elements by
@@ -44,7 +44,7 @@ public static class WfsGmlParser
 
             parcels.Add(new ParcelFeature(geometry, area));
         }
-        return new WfsPage<ParcelFeature>(parcels, members.Count, EpsgCodes(doc));
+        return new WfsPage<ParcelFeature>(parcels, members.Count, SrsNames(doc));
     }
 
     public static WfsPage<AddressFeature> ParseAddresses(Stream gml, bool isCityState = false) =>
@@ -76,19 +76,18 @@ public static class WfsGmlParser
 
             addresses.Add(new AddressFeature(point, str, hnr, hnrZus, plz, ort, gemeinde));
         }
-        return new WfsPage<AddressFeature>(addresses, members.Count, EpsgCodes(doc));
+        return new WfsPage<AddressFeature>(addresses, members.Count, SrsNames(doc));
     }
 
     private static List<XElement> TopLevelMembers(XDocument doc) =>
         doc.Root!.Elements().Where(e => e.Name.LocalName == "member").ToList();
 
-    /// <summary>EPSG codes of every srsName in the document (geometries and envelopes).</summary>
-    private static HashSet<int> EpsgCodes(XDocument doc) =>
+    /// <summary>Every distinct srsName in the document (geometries and envelopes).</summary>
+    private static HashSet<string> SrsNames(XDocument doc) =>
         doc.Descendants()
             .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName == "srsName")?.Value)
-            .Select(InspireSourceOptions.ParseEpsgCode)
-            .OfType<int>()
-            .ToHashSet();
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>
     /// A parcel's geometry: gml:Polygon (SH, BW, BB) or gml:Surface > gml:PolygonPatch (HH), and

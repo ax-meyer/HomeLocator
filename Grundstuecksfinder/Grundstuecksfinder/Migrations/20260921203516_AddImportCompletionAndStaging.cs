@@ -16,6 +16,12 @@ namespace Grundstuecksfinder.Migrations
                 type: "bigint",
                 nullable: true);
 
+            migrationBuilder.AddColumn<string>(
+                name: "LastError",
+                table: "ImportLogs",
+                type: "text",
+                nullable: true);
+
             // Every import so far that wrote rows committed; empty ones may have failed midway
             // and should be retried.
             migrationBuilder.Sql(
@@ -46,6 +52,10 @@ namespace Grundstuecksfinder.Migrations
 
             migrationBuilder.DropColumn(
                 name: "CompletedAt",
+                table: "ImportLogs");
+
+            migrationBuilder.DropColumn(
+                name: "LastError",
                 table: "ImportLogs");
         }
     }

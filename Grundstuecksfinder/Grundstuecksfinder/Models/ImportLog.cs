@@ -15,4 +15,7 @@ public class ImportLog
     /// logs count as "already imported", so a failed version is retried on the next run.
     /// </summary>
     public long? CompletedAt { get; set; }
+
+    /// <summary>Why the latest attempt of this version failed; null while running or once completed.</summary>
+    public string? LastError { get; set; }
 }
