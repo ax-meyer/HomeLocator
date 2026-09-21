@@ -4,8 +4,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Grundstuecksfinder.Services;
 
-public class PropertyService(AppDbContext context)
+public class PropertyService(AppDbContext context, DisabledSources disabledSources)
 {
+    private IQueryable<Property> VisibleProperties =>
+        context.Properties.Where(p => !disabledSources.Names.Contains(p.Source));
+
     public async Task<List<Property>> GetPropertiesAsync(
         string? gemeinde = null,
         string? plz = null,
@@ -13,7 +16,7 @@ public class PropertyService(AppDbContext context)
         double? maxFlaeche = null,
         int limit = 500)
     {
-        var query = context.Properties.AsQueryable();
+        var query = VisibleProperties;
 
         if (!string.IsNullOrWhiteSpace(gemeinde))
             query = query.Where(p => p.Gemeinde == gemeinde);
@@ -31,7 +34,7 @@ public class PropertyService(AppDbContext context)
     }
 
     public async Task<List<string>> GetDistinctGemeindenAsync() =>
-        await context.Properties
+        await VisibleProperties
             .Where(p => p.Gemeinde != null)
             .Select(p => p.Gemeinde!)
             .Distinct()
@@ -39,7 +42,7 @@ public class PropertyService(AppDbContext context)
             .ToListAsync();
 
     public async Task<List<string>> GetDistinctPlzAsync() =>
-        await context.Properties
+        await VisibleProperties
             .Where(p => p.Plz != null)
             .Select(p => p.Plz!)
             .Distinct()
@@ -48,10 +51,10 @@ public class PropertyService(AppDbContext context)
 
     public async Task<ImportLog?> GetLastImportAsync() =>
         await context.ImportLogs
-            .Where(l => l.RecordCount > 0)
+            .Where(l => l.RecordCount > 0 && !disabledSources.Names.Contains(l.Source))
             .OrderByDescending(l => l.ImportedAt)
             .FirstOrDefaultAsync();
 
     public async Task<long> GetTotalPropertyCountAsync() =>
-        await context.Properties.LongCountAsync();
+        await VisibleProperties.LongCountAsync();
 }

@@ -20,7 +20,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
 
         _context = new AppDbContext(options);
         await _context.Database.EnsureCreatedAsync();
-        _service = new PropertyService(_context);
+        _service = new PropertyService(_context, DisabledSources.None);
 
         _context.Properties.AddRange(
             new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 300 },

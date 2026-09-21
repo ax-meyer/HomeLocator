@@ -37,9 +37,12 @@ builder.Services.Configure<NrwImporterOptions>(builder.Configuration.GetSection(
 builder.Services.AddScoped<IPropertyImporter, NrwPropertyImporter>();
 
 // One IPropertyImporter per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
-// adding a state is adding an "Import:Inspire:Sources" entry, no new code.
+// adding a state is adding an "Import:Inspire:Sources" entry, no new code. "Enabled": false
+// stops its imports and hides its rows (see DisabledSources) without deleting them.
 var inspireSources = builder.Configuration.GetSection("Import:Inspire:Sources").Get<List<InspireSourceOptions>>() ?? [];
-foreach (var inspireSource in inspireSources)
+builder.Services.AddSingleton(new DisabledSources(
+    inspireSources.Where(s => !s.Enabled).Select(s => s.Source).ToList()));
+foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
     builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(
         sp.GetRequiredService<ILogger<InspirePropertyImporter>>(),

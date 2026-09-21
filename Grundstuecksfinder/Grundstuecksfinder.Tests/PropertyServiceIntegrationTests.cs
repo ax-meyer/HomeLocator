@@ -37,7 +37,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetPropertiesAsync(plz: "50667");
 
@@ -58,7 +58,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetPropertiesAsync(minFlaeche: 400, maxFlaeche: 600);
 
@@ -70,7 +70,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     public async Task GetLastImportAsync_NoLogs_ReturnsNull()
     {
         await using var context = fixture.CreateContext();
-        var service = new PropertyService(context);
+        var service = new PropertyService(context, DisabledSources.None);
 
         var result = await service.GetLastImportAsync();
 
@@ -91,11 +91,35 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetLastImportAsync();
 
         result.Should().NotBeNull();
         result!.RecordCount.Should().Be(20);
+    }
+
+    [Fact]
+    public async Task DisabledSource_IsHiddenFromSearchFiltersAndCounts()
+    {
+        await using var context = fixture.CreateContext();
+        var nrwLog = NewImportLog();
+        var heLog = NewImportLog();
+        heLog.Source = "he";
+        heLog.FileName = "he.zip";
+        heLog.RecordCount = 1;
+        context.Properties.AddRange(
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Gemeinde = "Köln", FlaecheAmtl = 500, Source = "nrw", ImportLog = nrwLog },
+            new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", FlaecheAmtl = 500, Source = "he", ImportLog = heLog });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, new DisabledSources(["he"]));
+
+        (await service.GetPropertiesAsync(minFlaeche: 100)).Should().ContainSingle().Which.Source.Should().Be("nrw");
+        (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
+        (await service.GetDistinctPlzAsync()).Should().Equal("50667");
+        (await service.GetTotalPropertyCountAsync()).Should().Be(1);
+        (await service.GetLastImportAsync()).Should().BeNull("the only non-empty import belongs to the disabled source");
     }
 }

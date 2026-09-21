@@ -10,6 +10,13 @@ public class InspireSourceOptions
     /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Source"/>.</summary>
     public string Source { get; set; } = string.Empty;
 
+    /// <summary>
+    /// False stops importing this source and hides its already-imported rows from the app
+    /// (they stay in the database). Keep the entry and flip this rather than deleting it —
+    /// a deleted entry's rows would stay visible.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
     public string DatasetName { get; set; } = string.Empty;
 
     /// <summary>Base URL of the cp:CadastralParcel WFS (INSPIRE download service).</summary>
