@@ -10,7 +10,7 @@ namespace Grundstuecksfinder.Infrastructure;
 /// via <see cref="MeterListener"/> and writes daily aggregates to the <c>DailyTelemetry</c> table.
 /// Events are accumulated in memory and flushed to the database every minute as well as on shutdown.
 /// </summary>
-public sealed class TelemetryWorker : BackgroundService
+public sealed partial class TelemetryWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<TelemetryWorker> _logger;
@@ -113,7 +113,10 @@ public sealed class TelemetryWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Telemetrie-Flush in die Datenbank fehlgeschlagen");
+            LogFlushFailed(_logger, ex);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Telemetrie-Flush in die Datenbank fehlgeschlagen")]
+    private static partial void LogFlushFailed(ILogger logger, Exception exception);
 }

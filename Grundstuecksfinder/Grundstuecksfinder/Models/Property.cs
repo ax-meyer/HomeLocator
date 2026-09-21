@@ -1,5 +1,3 @@
-using System.ComponentModel.DataAnnotations;
-
 namespace Grundstuecksfinder.Models;
 
 public class Property

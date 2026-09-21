@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Grundstuecksfinder.Components;
 using Grundstuecksfinder.Data;
@@ -5,7 +6,6 @@ using Grundstuecksfinder.Infrastructure;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Nrw;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Serilog;
@@ -20,7 +20,7 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
     .Enrich.WithMachineName()
     .Enrich.WithThreadId()
-    .WriteTo.Console());
+    .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture));
 
 // ── Database ──────────────────────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")

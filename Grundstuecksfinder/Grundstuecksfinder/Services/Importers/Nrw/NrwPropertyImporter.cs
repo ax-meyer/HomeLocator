@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using Grundstuecksfinder.Models;
 using Microsoft.Extensions.Options;
@@ -7,7 +6,7 @@ using Microsoft.Extensions.Options;
 namespace Grundstuecksfinder.Services.Importers.Nrw;
 
 /// <summary>Imports NRW's open-data "Grundsteuer" dataset: a JSON manifest pointing at a ZIP of semicolon-CSVs.</summary>
-public class NrwPropertyImporter(
+public partial class NrwPropertyImporter(
     ILogger<NrwPropertyImporter> logger,
     IHttpClientFactory httpClientFactory,
     IOptions<NrwImporterOptions> options) : IPropertyImporter
@@ -38,13 +37,13 @@ public class NrwPropertyImporter(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to fetch manifest from {Url}", options.Value.ManifestUrl);
+            LogManifestFetchFailed(logger, ex, options.Value.ManifestUrl);
             return [];
         }
 
         if (manifest?.Datasets is not { Count: > 0 })
         {
-            logger.LogWarning("Manifest contained no datasets");
+            LogManifestEmpty(logger);
             return [];
         }
 
@@ -55,7 +54,7 @@ public class NrwPropertyImporter(
             .ToList();
 
         if (candidates.Count == 0)
-            logger.LogWarning("Manifest contained no datasets with a zip file");
+            LogManifestNoZip(logger);
 
         return candidates;
     }
@@ -70,7 +69,7 @@ public class NrwPropertyImporter(
         var tempFile = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder_{Guid.NewGuid():N}.zip");
         try
         {
-            logger.LogInformation("Downloading {Url}...", url);
+            LogDownloading(logger, url);
             using (var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct))
             {
                 response.EnsureSuccessStatusCode();
@@ -78,12 +77,12 @@ public class NrwPropertyImporter(
                 await response.Content.CopyToAsync(fs, ct);
             }
 
-            logger.LogInformation("Download complete. Starting import...");
+            LogDownloadComplete(logger);
 
             await using var zip = await ZipFile.OpenReadAsync(tempFile, ct);
             foreach (var entry in zip.Entries.Where(e => e.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
             {
-                logger.LogInformation("Processing {Entry}...", entry.Name);
+                LogProcessingEntry(logger, entry.Name);
                 await using var stream = await entry.OpenAsync(ct);
                 using var reader = new StreamReader(stream);
 
@@ -105,4 +104,22 @@ public class NrwPropertyImporter(
                 File.Delete(tempFile);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to fetch manifest from {Url}")]
+    private static partial void LogManifestFetchFailed(ILogger logger, Exception exception, string url);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Manifest contained no datasets")]
+    private static partial void LogManifestEmpty(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Manifest contained no datasets with a zip file")]
+    private static partial void LogManifestNoZip(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Downloading {Url}...")]
+    private static partial void LogDownloading(ILogger logger, string url);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Download complete. Starting import...")]
+    private static partial void LogDownloadComplete(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Processing {Entry}...")]
+    private static partial void LogProcessingEntry(ILogger logger, string entry);
 }

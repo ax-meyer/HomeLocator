@@ -2,8 +2,6 @@
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
-        <Nullable>enable</Nullable>
-        <ImplicitUsings>enable</ImplicitUsings>
         <IsPackable>false</IsPackable>
         <!-- xUnit v3 test projects are self-executing: the runner is compiled in
              rather than supplied by an external VSTest host. -->
