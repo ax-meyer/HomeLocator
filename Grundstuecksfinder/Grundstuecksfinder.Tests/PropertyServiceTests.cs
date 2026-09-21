@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Grundstuecksfinder.Tests;
 
-public class PropertyServiceTests : IAsyncLifetime
+public sealed class PropertyServiceTests : IAsyncLifetime
 {
     private AppDbContext _context = null!;
     private PropertyService _service = null!;

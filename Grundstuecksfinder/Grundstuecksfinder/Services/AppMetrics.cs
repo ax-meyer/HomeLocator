@@ -4,7 +4,7 @@ namespace Grundstuecksfinder.Services;
 
 /// <summary>
 /// Thin instrumentation layer built on System.Diagnostics.Metrics (OpenTelemetry-compatible).
-/// The <see cref="TelemetryWorker"/> subscribes via <see cref="MeterListener"/> and persists
+/// The <see cref="Infrastructure.TelemetryWorker"/> subscribes via <see cref="MeterListener"/> and persists
 /// aggregated daily counts to the database.
 /// </summary>
 public sealed class AppMetrics : IDisposable

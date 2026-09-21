@@ -17,7 +17,7 @@ using Microsoft.Extensions.Options;
 namespace Grundstuecksfinder.Tests.Importers.Nrw;
 
 [Collection("Postgres")]
-public class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
+public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
     private const string ManifestUrl = "http://fake/manifest.json";
     private const string BaseDownloadUrl = "http://fake/downloads/";
@@ -95,10 +95,10 @@ public class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsy
             });
 
         var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync();
+        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        var properties = await context.Properties.ToListAsync();
+        var properties = await context.Properties.ToListAsync(TestContext.Current.CancellationToken);
         properties.Should().NotBeEmpty("CSV rows should have been imported");
         properties.Should().OnlyContain(p => p.Source == NrwPropertyImporter.SourceId);
     }
@@ -119,10 +119,10 @@ public class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsy
             });
 
         var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync();
+        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        var log = await context.ImportLogs.FirstOrDefaultAsync();
+        var log = await context.ImportLogs.FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         log.Should().NotBeNull();
         log!.Source.Should().Be(NrwPropertyImporter.SourceId);
@@ -147,7 +147,7 @@ public class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsy
                 ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 RecordCount = 999
             });
-            await context.SaveChangesAsync();
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         var downloadCalled = false;
@@ -168,7 +168,7 @@ public class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsy
             });
 
         var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync();
+        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         downloadCalled.Should().BeFalse("ZIP should not be downloaded when already imported");
     }

@@ -10,7 +10,7 @@ namespace Grundstuecksfinder.Services.Importers;
 /// <see cref="PropertyBulkWriter"/>. Adding a region is registering another
 /// <see cref="IPropertyImporter"/> in DI — this class needs no changes.
 /// </summary>
-public class ImportOrchestrator(
+public partial class ImportOrchestrator(
     IEnumerable<IPropertyImporter> importers,
     ILogger<ImportOrchestrator> logger,
     IServiceScopeFactory scopeFactory,
@@ -30,14 +30,14 @@ public class ImportOrchestrator(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Discovery failed for source {Source}", importer.Source);
+                LogDiscoveryFailed(logger, ex, importer.Source);
             }
         }
     }
 
     private async Task RunImporterAsync(IPropertyImporter importer, CancellationToken ct)
     {
-        logger.LogInformation("Checking for new data from {Source}...", importer.Source);
+        LogCheckingForNewData(logger, importer.Source);
 
         var candidates = await importer.DiscoverAsync(ct);
 
@@ -54,8 +54,7 @@ public class ImportOrchestrator(
 
             if (alreadyImported)
             {
-                logger.LogInformation("Dataset {Source}/{Name}/{File} already imported, skipping",
-                    importer.Source, candidate.DatasetName, candidate.FileName);
+                LogAlreadyImported(logger, importer.Source, candidate.DatasetName, candidate.FileName);
                 continue;
             }
 
@@ -80,13 +79,13 @@ public class ImportOrchestrator(
 
         try
         {
-            logger.LogInformation("Importing {Source}/{Name}/{File}...", importer.Source, candidate.DatasetName, candidate.FileName);
+            LogImporting(logger, importer.Source, candidate.DatasetName, candidate.FileName);
 
             var count = await bulkWriter.WriteAsync(importer.Source, importer.FetchAsync(candidate, ct), importLog.Id, ct);
 
             importLog.RecordCount = count;
             await context.SaveChangesAsync(ct);
-            logger.LogInformation("Import complete for {Source}. Total records: {Count}", importer.Source, count);
+            LogImportComplete(logger, importer.Source, count);
         }
         catch (OperationCanceledException)
         {
@@ -94,7 +93,25 @@ public class ImportOrchestrator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Import failed for {Source}/{Name}/{File}", importer.Source, candidate.DatasetName, candidate.FileName);
+            LogImportFailed(logger, ex, importer.Source, candidate.DatasetName, candidate.FileName);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Discovery failed for source {Source}")]
+    private static partial void LogDiscoveryFailed(ILogger logger, Exception exception, string source);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Checking for new data from {Source}...")]
+    private static partial void LogCheckingForNewData(ILogger logger, string source);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Dataset {Source}/{Name}/{File} already imported, skipping")]
+    private static partial void LogAlreadyImported(ILogger logger, string source, string name, string file);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Importing {Source}/{Name}/{File}...")]
+    private static partial void LogImporting(ILogger logger, string source, string name, string file);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Import complete for {Source}. Total records: {Count}")]
+    private static partial void LogImportComplete(ILogger logger, string source, long count);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Import failed for {Source}/{Name}/{File}")]
+    private static partial void LogImportFailed(ILogger logger, Exception exception, string source, string name, string file);
 }

@@ -17,7 +17,7 @@ namespace Grundstuecksfinder.Tests.Importers;
 /// importer failing must not stop the others.
 /// </summary>
 [Collection("Postgres")]
-public class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
+public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
 {
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -43,11 +43,11 @@ public class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
         var importerA = new StubPropertyImporter("a", "ds", "file-a", "2026-01-01", [MakeProperty("a")]);
         var importerB = new StubPropertyImporter("b", "ds", "file-b", "2026-01-01", [MakeProperty("b")]);
 
-        await BuildOrchestrator(importerA, importerB).CheckAndImportAsync();
+        await BuildOrchestrator(importerA, importerB).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        (await context.Properties.CountAsync(p => p.Source == "a")).Should().Be(1);
-        (await context.Properties.CountAsync(p => p.Source == "b")).Should().Be(1);
+        (await context.Properties.CountAsync(p => p.Source == "a", TestContext.Current.CancellationToken)).Should().Be(1);
+        (await context.Properties.CountAsync(p => p.Source == "b", TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     [Fact]
@@ -55,15 +55,15 @@ public class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
     {
         var importerA = new StubPropertyImporter("a", "ds", "file-a", "2026-01-01", [MakeProperty("a")]);
         var importerB = new StubPropertyImporter("b", "ds", "file-b", "2026-01-01", [MakeProperty("b")]);
-        await BuildOrchestrator(importerA, importerB).CheckAndImportAsync();
+        await BuildOrchestrator(importerA, importerB).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         // A newer version of source A's data becomes available
         var importerANewer = new StubPropertyImporter("a", "ds", "file-a", "2026-02-01", [MakeProperty("a", "Neue Straße")]);
-        await BuildOrchestrator(importerANewer, importerB).CheckAndImportAsync();
+        await BuildOrchestrator(importerANewer, importerB).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        (await context.Properties.CountAsync(p => p.Source == "b")).Should().Be(1, "source B's rows must survive source A's re-import");
-        var aRows = await context.Properties.Where(p => p.Source == "a").ToListAsync();
+        (await context.Properties.CountAsync(p => p.Source == "b", TestContext.Current.CancellationToken)).Should().Be(1, "source B's rows must survive source A's re-import");
+        var aRows = await context.Properties.Where(p => p.Source == "a").ToListAsync(TestContext.Current.CancellationToken);
         aRows.Should().ContainSingle().Which.Str.Should().Be("Neue Straße");
     }
 
@@ -72,13 +72,13 @@ public class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
     {
         // Two unrelated sources coincidentally reuse identical dataset/file/timestamp naming.
         var importerA = new StubPropertyImporter("a", "ds", "latest.zip", "2026-01-01", [MakeProperty("a")]);
-        await BuildOrchestrator(importerA).CheckAndImportAsync();
+        await BuildOrchestrator(importerA).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         var importerB = new StubPropertyImporter("b", "ds", "latest.zip", "2026-01-01", [MakeProperty("b")]);
-        await BuildOrchestrator(importerB).CheckAndImportAsync();
+        await BuildOrchestrator(importerB).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        (await context.Properties.CountAsync(p => p.Source == "b")).Should().Be(1, "dedup must be scoped by Source, not just dataset/file/timestamp");
+        (await context.Properties.CountAsync(p => p.Source == "b", TestContext.Current.CancellationToken)).Should().Be(1, "dedup must be scoped by Source, not just dataset/file/timestamp");
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLifetime
         await act.Should().NotThrowAsync();
 
         await using var context = fixture.CreateContext();
-        (await context.Properties.CountAsync(p => p.Source == "ok")).Should().Be(1);
+        (await context.Properties.CountAsync(p => p.Source == "ok", TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     private sealed class StubPropertyImporter(

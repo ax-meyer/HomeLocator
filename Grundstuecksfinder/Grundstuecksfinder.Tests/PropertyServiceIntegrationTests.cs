@@ -7,7 +7,7 @@ using Grundstuecksfinder.Tests.TestHelpers;
 namespace Grundstuecksfinder.Tests;
 
 [Collection("Postgres")]
-public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
+public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -34,7 +34,7 @@ public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLi
             new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 200, ImportLog = importLog },
             new Property { Str = "Bergstraße", Hnr = "5", Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog }
         );
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext);
@@ -55,7 +55,7 @@ public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLi
             new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog },
             new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 1000, ImportLog = importLog }
         );
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext);
@@ -88,7 +88,7 @@ public class PropertyServiceIntegrationTests(PostgresFixture fixture) : IAsyncLi
             new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10 },
             new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20 }
         );
-        await context.SaveChangesAsync();
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext);

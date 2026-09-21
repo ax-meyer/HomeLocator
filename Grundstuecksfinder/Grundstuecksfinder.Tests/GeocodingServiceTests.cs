@@ -10,10 +10,10 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Grundstuecksfinder.Tests;
 
-public class GeocodingServiceTests : IDisposable
+public sealed class GeocodingServiceTests : IDisposable
 {
     private readonly FakeHttpMessageHandler _handler = new();
-    private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
+    private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
     private readonly GeocodingService _service;
 
     public GeocodingServiceTests()

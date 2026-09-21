@@ -1,0 +1,17 @@
+root = true
+
+[*.cs]
+# Unused usings fail the build (needs GenerateDocumentationFile, set in Directory.Build.props).
+dotnet_diagnostic.IDE0005.severity = warning
+
+# CA1716 guards public library APIs against VB keywords. This is an app, and renaming the
+# core Property model isn't worth it.
+dotnet_diagnostic.CA1716.severity = none
+
+# EF Core migrations are generated; don't analyze them.
+[**/Migrations/*.cs]
+generated_code = true
+
+# Test names use the xUnit Method_Scenario_Result convention.
+[Grundstuecksfinder.Tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none

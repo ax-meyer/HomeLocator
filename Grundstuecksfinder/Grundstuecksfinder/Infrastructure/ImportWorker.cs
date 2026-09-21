@@ -5,7 +5,7 @@ namespace Grundstuecksfinder.Infrastructure;
 /// <summary>
 /// Runs every registered <see cref="IPropertyImporter"/> daily at 03:00 UTC.
 /// </summary>
-public class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<ImportWorker> logger) : BackgroundService
+public partial class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<ImportWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -18,7 +18,7 @@ public class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<ImportWorke
         while (!stoppingToken.IsCancellationRequested)
         {
             var delay = TimeUntilNext(new TimeOnly(3, 0));
-            logger.LogInformation(@"Next import scheduled in {Delay:hh\:mm\:ss}", delay);
+            LogNextImportScheduled(logger, delay);
             await Task.Delay(delay, stoppingToken);
 
             using var scope = scopeFactory.CreateScope();
@@ -34,4 +34,9 @@ public class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<ImportWorke
         if (next <= now) next = next.AddDays(1);
         return next - now;
     }
+
+    // No hh\:mm\:ss format specifier: the logging source generator doesn't escape the
+    // backslashes a TimeSpan custom format needs.
+    [LoggerMessage(Level = LogLevel.Information, Message = "Next import scheduled in {Delay}")]
+    private static partial void LogNextImportScheduled(ILogger logger, TimeSpan delay);
 }

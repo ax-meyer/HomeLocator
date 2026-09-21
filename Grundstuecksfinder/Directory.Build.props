@@ -1,0 +1,19 @@
+<Project>
+    <!-- Shared build settings for every project in this directory (app and tests). Also picked
+         up by the Docker build, whose context is this directory. -->
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+        <!-- Microsoft's recommended .NET analyzer set, plus code-style rules at build time. -->
+        <EnableNETAnalyzers>true</EnableNETAnalyzers>
+        <AnalysisLevel>latest-recommended</AnalysisLevel>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <!-- Required for IDE0005 (unused usings) to be reported at build time; the XML file
+             itself is unused, so missing-doc-comment warnings are off. -->
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <NoWarn>$(NoWarn);CS1591</NoWarn>
+    </PropertyGroup>
+</Project>
