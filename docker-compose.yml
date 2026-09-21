@@ -55,7 +55,9 @@ services:
   nominatim:
     image: mediagis/nominatim:5.3
     restart: unless-stopped
-    shm_size: "${NOMINATIM_SHM_SIZE:-4g}"
+    shm_size: "${NOMINATIM_SHM_SIZE:-1g}"
+    # Hard cap so an import that overshoots gets Nominatim killed, not the app or its db.
+    mem_limit: "${NOMINATIM_MEM_LIMIT:-9g}"
     environment:
       PBF_URL: https://download.geofabrik.de/europe/germany-latest.osm.pbf
       REPLICATION_URL: https://download.geofabrik.de/europe/germany-updates/
@@ -63,13 +65,19 @@ services:
       # Streets and house numbers only, no POIs — all the app queries, and much smaller.
       IMPORT_STYLE: address
       IMPORT_WIKIPEDIA: "false"
+      # Fewer parallel import/index workers = fewer concurrent maintenance_work_mem users.
+      THREADS: "${NOMINATIM_THREADS:-4}"
       # Nominatim's own internal Postgres, reachable only from inside this container.
       NOMINATIM_PASSWORD: "${NOMINATIM_PASSWORD:-nominatim}"
-      # The image's defaults assume a 32 GB+ machine; size these to the server's RAM.
-      POSTGRES_SHARED_BUFFERS: "${NOMINATIM_SHARED_BUFFERS:-2GB}"
-      POSTGRES_MAINTENANCE_WORK_MEM: "${NOMINATIM_MAINTENANCE_WORK_MEM:-4GB}"
-      POSTGRES_AUTOVACUUM_WORK_MEM: "${NOMINATIM_AUTOVACUUM_WORK_MEM:-1GB}"
-      POSTGRES_EFFECTIVE_CACHE_SIZE: "${NOMINATIM_EFFECTIVE_CACHE_SIZE:-8GB}"
+      # The image's defaults assume a 32 GB+ machine. These fit a 16 GB server that has
+      # ~10 GB left after the app, its database and the OS. The import additionally sizes
+      # osm2pgsql's node cache itself (up to 75% of free host RAM), which is why these are
+      # kept small and the container is capped below.
+      POSTGRES_SHARED_BUFFERS: "${NOMINATIM_SHARED_BUFFERS:-1GB}"
+      POSTGRES_MAINTENANCE_WORK_MEM: "${NOMINATIM_MAINTENANCE_WORK_MEM:-1GB}"
+      POSTGRES_AUTOVACUUM_WORK_MEM: "${NOMINATIM_AUTOVACUUM_WORK_MEM:-256MB}"
+      # Planner hint only; allocates nothing.
+      POSTGRES_EFFECTIVE_CACHE_SIZE: "${NOMINATIM_EFFECTIVE_CACHE_SIZE:-4GB}"
     volumes:
       # No /nominatim/flatnode mount on purpose: mounting it enables flatnode storage, which
       # is sized for the whole planet and only pays off for continent-sized extracts.
