@@ -11,6 +11,8 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
     private readonly Dictionary<string, Func<HttpResponseMessage>> _routes = new();
     private Func<HttpResponseMessage>? _default;
 
+    public List<Uri> RequestedUris { get; } = [];
+
     public void AddRoute(string url, Func<HttpResponseMessage> factory) =>
         _routes[url] = factory;
 
@@ -20,6 +22,7 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        RequestedUris.Add(request.RequestUri!);
         var url = request.RequestUri!.ToString();
         var factory = _routes.GetValueOrDefault(url) ?? _default;
         var response = factory?.Invoke()

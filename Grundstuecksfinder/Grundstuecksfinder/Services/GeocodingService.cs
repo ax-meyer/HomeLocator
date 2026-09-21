@@ -44,13 +44,18 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
 
     private static string? BuildQuery(Property p)
     {
+        // Normalize again here so rows imported before the importer cleaned names up
+        // ("Stadt Pirna", "Kiel, Landeshauptstadt", "Cottbus [Chóśebuz]") still geocode.
+        var str = PlaceNameNormalizer.RepairStreet(p.Str);
+        var ort = PlaceNameNormalizer.NormalizePlace(p.Ort);
+
         var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(p.Str) && !string.IsNullOrWhiteSpace(p.Hnr))
-            parts.Add($"street={Uri.EscapeDataString($"{p.Hnr} {p.Str}")}");
+        if (str is not null && !string.IsNullOrWhiteSpace(p.Hnr))
+            parts.Add($"street={Uri.EscapeDataString($"{p.Hnr} {str}")}");
         if (!string.IsNullOrWhiteSpace(p.Plz))
             parts.Add($"postalcode={Uri.EscapeDataString(p.Plz)}");
-        if (!string.IsNullOrWhiteSpace(p.Ort))
-            parts.Add($"city={Uri.EscapeDataString(p.Ort)}");
+        if (ort is not null)
+            parts.Add($"city={Uri.EscapeDataString(ort)}");
 
         return parts.Count == 0 ? null : string.Join("&", parts);
     }

@@ -5,6 +5,7 @@ using Grundstuecksfinder.Data;
 using Grundstuecksfinder.Infrastructure;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Services.Importers;
+using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Nrw;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -34,6 +35,18 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 // Add a new Bundesland/country by implementing IPropertyImporter and registering it here.
 builder.Services.Configure<NrwImporterOptions>(builder.Configuration.GetSection("Import:Nrw"));
 builder.Services.AddScoped<IPropertyImporter, NrwPropertyImporter>();
+
+// One IPropertyImporter per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
+// adding a state is adding an "Import:Inspire:Sources" entry, no new code.
+var inspireSources = builder.Configuration.GetSection("Import:Inspire:Sources").Get<List<InspireSourceOptions>>() ?? [];
+foreach (var inspireSource in inspireSources)
+{
+    builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(
+        sp.GetRequiredService<ILogger<InspirePropertyImporter>>(),
+        sp.GetRequiredService<IHttpClientFactory>(),
+        inspireSource));
+}
+
 builder.Services.AddScoped<PropertyBulkWriter>();
 builder.Services.AddScoped<ImportOrchestrator>();
 builder.Services.AddHostedService<ImportWorker>();

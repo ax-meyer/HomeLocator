@@ -100,4 +100,35 @@ public sealed class GeocodingServiceTests : IDisposable
 
         result.Should().BeNull();
     }
+
+    [Theory]
+    [InlineData("Stadt Pirna", "Pirna")]
+    [InlineData("Kiel, Landeshauptstadt", "Kiel")]
+    [InlineData("Cottbus [Chóśebuz]", "Cottbus")]
+    public async Task GeocodeAsync_OfficialPlaceName_QueriesNominatimWithPlainName(string ort, string expectedCity)
+    {
+        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+
+        await _service.GeocodeAsync(SampleProperty(ort: ort));
+
+        Uri.UnescapeDataString(_handler.RequestedUris.Single().Query)
+            .Should().Contain($"city={expectedCity}&");
+    }
+
+    [Fact]
+    public async Task GeocodeAsync_HessenCorruptedStrasse_QueriesNominatimWithRepairedStreet()
+    {
+        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+
+        await _service.GeocodeAsync(SampleProperty(str: "Adam-Riese-Stra\uFFFDe", ort: "Frankfurt am Main"));
+
+        Uri.UnescapeDataString(_handler.RequestedUris.Single().Query)
+            .Should().Contain("street=1 Adam-Riese-Straße&");
+    }
 }

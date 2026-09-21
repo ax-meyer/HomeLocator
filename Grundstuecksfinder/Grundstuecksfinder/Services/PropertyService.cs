@@ -48,6 +48,10 @@ public class PropertyService(AppDbContext context)
 
     public async Task<ImportLog?> GetLastImportAsync() =>
         await context.ImportLogs
+            .Where(l => l.RecordCount > 0)
             .OrderByDescending(l => l.ImportedAt)
             .FirstOrDefaultAsync();
+
+    public async Task<long> GetTotalPropertyCountAsync() =>
+        await context.Properties.LongCountAsync();
 }

@@ -37,4 +37,11 @@
         </Content>
     </ItemGroup>
 
+    <!-- Recorded/synthetic WFS GML fixtures for the INSPIRE importer -->
+    <ItemGroup>
+        <Content Include="Importers/Inspire/TestData/*.gml">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
 </Project>
