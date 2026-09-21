@@ -85,8 +85,10 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
 
         await using var context = fixture.CreateContext();
         context.ImportLogs.AddRange(
-            new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10 },
-            new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20 }
+            new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10, CompletedAt = older },
+            new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20, CompletedAt = newer },
+            // Newest, but still running (or failed): not the "last import" shown to users.
+            new ImportLog { DatasetName = "ds1", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = newer + 1, RecordCount = 0 }
         );
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
@@ -108,6 +110,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         heLog.Source = "he";
         heLog.FileName = "he.zip";
         heLog.RecordCount = 1;
+        heLog.CompletedAt = 1;
         context.Properties.AddRange(
             new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Gemeinde = "Köln", FlaecheAmtl = 500, Source = "nrw", ImportLog = nrwLog },
             new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", FlaecheAmtl = 500, Source = "he", ImportLog = heLog });

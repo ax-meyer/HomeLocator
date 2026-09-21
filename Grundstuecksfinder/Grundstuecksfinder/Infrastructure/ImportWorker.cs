@@ -9,21 +9,30 @@ public partial class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<Imp
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using (var scope = scopeFactory.CreateScope())
-        {
-            var orchestrator = scope.ServiceProvider.GetRequiredService<ImportOrchestrator>();
-            await orchestrator.CheckAndImportAsync(stoppingToken);
-        }
+        await RunOnceAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var delay = TimeUntilNext(new TimeOnly(3, 0));
             LogNextImportScheduled(logger, delay);
             await Task.Delay(delay, stoppingToken);
+            await RunOnceAsync(stoppingToken);
+        }
+    }
 
+    private async Task RunOnceAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
             using var scope = scopeFactory.CreateScope();
             var orchestrator = scope.ServiceProvider.GetRequiredService<ImportOrchestrator>();
             await orchestrator.CheckAndImportAsync(stoppingToken);
+        }
+        // An exception escaping a BackgroundService stops the whole host (the web app with it),
+        // so a failed run is logged and the next one tried tomorrow.
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            LogRunFailed(logger, ex);
         }
     }
 
@@ -39,4 +48,7 @@ public partial class ImportWorker(IServiceScopeFactory scopeFactory, ILogger<Imp
     // backslashes a TimeSpan custom format needs.
     [LoggerMessage(Level = LogLevel.Information, Message = "Next import scheduled in {Delay}")]
     private static partial void LogNextImportScheduled(ILogger logger, TimeSpan delay);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Import run failed; retrying at the next scheduled run")]
+    private static partial void LogRunFailed(ILogger logger, Exception exception);
 }

@@ -4,6 +4,16 @@ using NetTopologySuite.Geometries;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
+/// <summary>A parsed parcel: its official area and its (possibly multi-part) geometry.</summary>
+public sealed record ParcelFeature(Geometry Geometry, double AreaM2);
+
+/// <summary>
+/// One parsed GetFeature response. <see cref="MemberCount"/> counts every returned feature,
+/// including ones the parser skipped as malformed, so "the page is full" can be judged
+/// against the requested count. <see cref="EpsgCodes"/> are the CRSs the geometries claim.
+/// </summary>
+public sealed record WfsPage<T>(IReadOnlyList<T> Features, int MemberCount, IReadOnlySet<int> EpsgCodes);
+
 /// <summary>
 /// Parses cp:CadastralParcel and ad:Address WFS GetFeature GML responses. Matches elements by
 /// local name only (not full XName), so it isn't pinned to one INSPIRE schema version/prefix
@@ -14,10 +24,13 @@ public static class WfsGmlParser
 {
     private static readonly GeometryFactory GeometryFactory = new();
 
-    public static IEnumerable<(Polygon Polygon, double AreaM2)> ParseCadastralParcels(Stream gml)
+    public static WfsPage<ParcelFeature> ParseCadastralParcels(Stream gml) => ParseCadastralParcels(XDocument.Load(gml));
+
+    public static WfsPage<ParcelFeature> ParseCadastralParcels(XDocument doc)
     {
-        var doc = XDocument.Load(gml);
-        foreach (var member in doc.Root!.Elements().Where(e => e.Name.LocalName == "member"))
+        var members = TopLevelMembers(doc);
+        var parcels = new List<ParcelFeature>(members.Count);
+        foreach (var member in members)
         {
             var parcel = member.Elements().FirstOrDefault(e => e.Name.LocalName == "CadastralParcel");
             if (parcel is null) continue;
@@ -26,20 +39,19 @@ public static class WfsGmlParser
             if (!double.TryParse(areaText, NumberStyles.Any, CultureInfo.InvariantCulture, out var area))
                 continue;
 
-            // Some states (SH, BW, BB) use gml:Polygon; others (HH) wrap it as
-            // gml:Surface > gml:PolygonPatch. PolygonPatch has the same interior structure.
-            var geomElement = parcel.Descendants().FirstOrDefault(e =>
-                e.Name.LocalName is "Polygon" or "PolygonPatch");
-            var polygon = ParsePolygon(geomElement);
-            if (polygon is null) continue;
+            var geometry = ParseParcelGeometry(parcel);
+            if (geometry is null) continue;
 
-            yield return (polygon, area);
+            parcels.Add(new ParcelFeature(geometry, area));
         }
+        return new WfsPage<ParcelFeature>(parcels, members.Count, EpsgCodes(doc));
     }
 
-    public static IEnumerable<AddressFeature> ParseAddresses(Stream gml)
+    public static WfsPage<AddressFeature> ParseAddresses(Stream gml, bool isCityState = false) =>
+        ParseAddresses(XDocument.Load(gml), isCityState);
+
+    public static WfsPage<AddressFeature> ParseAddresses(XDocument doc, bool isCityState = false)
     {
-        var doc = XDocument.Load(gml);
         var componentsById = new Dictionary<string, XElement>();
         foreach (var member in doc.Root!
                      .Descendants().Where(e => e.Name.LocalName == "additionalObjects")
@@ -49,7 +61,9 @@ public static class WfsGmlParser
                 componentsById[GmlId(component)] = component;
         }
 
-        foreach (var member in doc.Root.Elements().Where(e => e.Name.LocalName == "member"))
+        var members = TopLevelMembers(doc);
+        var addresses = new List<AddressFeature>(members.Count);
+        foreach (var member in members)
         {
             var address = member.Elements().FirstOrDefault(e => e.Name.LocalName == "Address");
             if (address is null) continue;
@@ -58,14 +72,45 @@ public static class WfsGmlParser
             if (point is null) continue; // nothing to join without a location
 
             var (hnr, hnrZus) = ParseDesignators(address);
-            var (str, plz, ort, gemeinde) = ResolveComponents(address, componentsById);
+            var (str, plz, ort, gemeinde) = ResolveComponents(address, componentsById, isCityState);
 
-            yield return new AddressFeature(point, str, hnr, hnrZus, plz, ort, gemeinde);
+            addresses.Add(new AddressFeature(point, str, hnr, hnrZus, plz, ort, gemeinde));
         }
+        return new WfsPage<AddressFeature>(addresses, members.Count, EpsgCodes(doc));
+    }
+
+    private static List<XElement> TopLevelMembers(XDocument doc) =>
+        doc.Root!.Elements().Where(e => e.Name.LocalName == "member").ToList();
+
+    /// <summary>EPSG codes of every srsName in the document (geometries and envelopes).</summary>
+    private static HashSet<int> EpsgCodes(XDocument doc) =>
+        doc.Descendants()
+            .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName == "srsName")?.Value)
+            .Select(InspireSourceOptions.ParseEpsgCode)
+            .OfType<int>()
+            .ToHashSet();
+
+    /// <summary>
+    /// A parcel's geometry: gml:Polygon (SH, BW, BB) or gml:Surface > gml:PolygonPatch (HH), and
+    /// for multi-part parcels (gml:MultiSurface) all of its parts, so an address in any part matches.
+    /// </summary>
+    private static Geometry? ParseParcelGeometry(XElement parcel)
+    {
+        var polygons = parcel.Descendants()
+            .Where(e => e.Name.LocalName is "Polygon" or "PolygonPatch")
+            .Select(ParsePolygon)
+            .OfType<Polygon>()
+            .ToArray();
+        return polygons.Length switch
+        {
+            0 => null,
+            1 => polygons[0],
+            _ => GeometryFactory.CreateMultiPolygon(polygons),
+        };
     }
 
     private static (string? Str, string? Plz, string? Ort, string? Gemeinde) ResolveComponents(
-        XElement address, Dictionary<string, XElement> componentsById)
+        XElement address, Dictionary<string, XElement> componentsById, bool isCityState)
     {
         string? str = null;
         string? plz = null;
@@ -100,9 +145,8 @@ public static class WfsGmlParser
         }
 
         // SH/SN/BB carry AGS codes, whose length gives the admin level directly. HE/BW/HH only
-        // carry ad:level, which is mapped to a synthetic AGS length. City-states need to know
-        // up front, because there the Land itself is the Gemeinde.
-        var isCityState = rawUnits.Any(u => u.Level == "2ndOrder" && CityStates.Contains(u.Name));
+        // carry ad:level, which is mapped to a synthetic AGS length — differently for
+        // city-states (configured per source), where the Land itself is the Gemeinde.
         var adminUnits = rawUnits
             .Select(u => (AgsLength: u.Ags?.Length ?? SyntheticAgsLength(u.Level, isCityState), u.Name))
             .Where(u => u.AgsLength > 0)
@@ -142,8 +186,6 @@ public static class WfsGmlParser
         }
         return (hnr, hnrZus);
     }
-
-    private static readonly HashSet<string> CityStates = ["Hamburg", "Berlin"];
 
     /// <summary>E.g. ".../AdministrativeHierarchyLevel/6thOrder" → "6thOrder".</summary>
     private static string? LevelOrdinal(XElement adminUnitName)
@@ -220,19 +262,19 @@ public static class WfsGmlParser
         // Complex case (HH): Ring > curveMember* > Curve > LineStringSegment > posList — many
         // posLists, one per edge. Collect and concatenate them, deduplicating shared endpoints.
         var posLists = exteriorOrInterior.Descendants()
-            .Where(e => e.Name.LocalName == "posList")
-            .Select(e => e.Value)
-            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Where(e => e.Name.LocalName == "posList" && !string.IsNullOrWhiteSpace(e.Value))
             .ToList();
         if (posLists.Count == 0) return null;
 
         var allCoords = new List<Coordinate>();
         foreach (var posList in posLists)
         {
-            var raw = posList.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (raw.Length < 4 || raw.Length % 2 != 0) continue;
+            // 3D data lists x y z per vertex; only x and y matter for the join.
+            var dimension = SrsDimension(posList);
+            var raw = posList.Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (raw.Length < 2 * dimension || raw.Length % dimension != 0) continue;
 
-            for (var i = 0; i < raw.Length; i += 2)
+            for (var i = 0; i < raw.Length; i += dimension)
             {
                 if (!double.TryParse(raw[i], NumberStyles.Any, CultureInfo.InvariantCulture, out var x) ||
                     !double.TryParse(raw[i + 1], NumberStyles.Any, CultureInfo.InvariantCulture, out var y))
@@ -256,6 +298,17 @@ public static class WfsGmlParser
         {
             return null;
         }
+    }
+
+    /// <summary>srsDimension of the nearest element declaring it (posList or an ancestor); 2 by default.</summary>
+    private static int SrsDimension(XElement posList)
+    {
+        var declared = posList.AncestorsAndSelf()
+            .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName == "srsDimension")?.Value)
+            .FirstOrDefault(v => v is not null);
+        return int.TryParse(declared, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dimension) && dimension >= 2
+            ? dimension
+            : 2;
     }
 
     private static Point? ParsePoint(XElement? gmlPoint)

@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
@@ -5,7 +8,7 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// (text+geometry), joined spatially since neither dataset carries both. Adding a state is
 /// adding an entry to "Import:Inspire:Sources" — no new code.
 /// </summary>
-public class InspireSourceOptions
+public partial class InspireSourceOptions
 {
     /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Source"/>.</summary>
     public string Source { get; set; } = string.Empty;
@@ -26,19 +29,120 @@ public class InspireSourceOptions
     public string AddressWfsUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// The srsName both WFS endpoints are expected to return geometry in (e.g.
-    /// "http://www.opengis.net/def/crs/epsg/0/25832"). Parsed features whose srsName
-    /// doesn't match this are rejected rather than silently joined in the wrong CRS.
+    /// The CRS both services are asked for (srsName) and must answer in, e.g.
+    /// "urn:ogc:def:crs:EPSG::25832". Must be an ETRS89/UTM zone (EPSG 25831–25833): tiling
+    /// assumes metres with easting first. A response in any other CRS fails the import.
     /// </summary>
     public string Crs { get; set; } = string.Empty;
 
     public InspireBoundingBox BoundingBox { get; set; } = new();
 
-    /// <summary>Size (in the CRS's linear unit, i.e. metres for EPSG:25832) of each internal fetch tile.</summary>
+    /// <summary>Size of the initial fetch tiles, in metres. Tiles that come back full are split.</summary>
     public double TileSizeMeters { get; set; } = 5000;
 
-    /// <summary>Max features requested per GetFeature page; the importer pages via startIndex until exhausted.</summary>
-    public int PageSize { get; set; } = 2000;
+    /// <summary>
+    /// Smallest tile a full one may be split into. A tile still full at this size means more
+    /// features than a page can hold in a tiny area; the import fails rather than lose them.
+    /// </summary>
+    public double MinTileSizeMeters { get; set; } = 50;
+
+    /// <summary>
+    /// Max features requested per GetFeature call. The importer never pages via startIndex (some
+    /// servers ignore it); a tile returning this many features is split into four instead. Capped
+    /// further by the server's advertised CountDefault.
+    /// </summary>
+    public int PageSize { get; set; } = 5000;
+
+    /// <summary>
+    /// For Hamburg/Berlin: the Land itself is the Gemeinde, and the ad:level hierarchy maps
+    /// differently (see <see cref="WfsGmlParser"/>).
+    /// </summary>
+    public bool IsCityState { get; set; }
+
+    /// <summary>Attempts per WFS request (timeouts, 5xx, broken responses) before the import fails.</summary>
+    public int MaxAttempts { get; set; } = 4;
+
+    /// <summary>Wait before the first retry; doubles with every further attempt.</summary>
+    public double RetryBaseDelaySeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Minimum share of the address service's reported total that must have been fetched, or
+    /// the import fails and the previous data stays.
+    /// </summary>
+    public double MinCompleteness { get; set; } = 0.95;
+
+    /// <summary>
+    /// Maximum share of fetched addresses without a containing parcel. Far above the usual few
+    /// percent means the join is broken (e.g. wrong CRS), so the import fails.
+    /// </summary>
+    public double MaxUnmatchedRatio { get; set; } = 0.2;
+
+    /// <summary>The EPSG code of <see cref="Crs"/>, e.g. 25832; null if it names none.</summary>
+    public int? CrsEpsgCode => ParseEpsgCode(Crs);
+
+    /// <summary>
+    /// Extracts the EPSG code from any of the srsName forms WFS servers use:
+    /// "urn:ogc:def:crs:EPSG::25832", "http://www.opengis.net/def/crs/epsg/0/25832", "EPSG:25832".
+    /// </summary>
+    public static int? ParseEpsgCode(string? srsName)
+    {
+        if (string.IsNullOrWhiteSpace(srsName)) return null;
+        var match = EpsgCodePattern().Match(srsName.Trim());
+        return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
+    }
+
+    /// <summary>
+    /// Checks a whole "Import:Inspire:Sources" list; returns one message per problem. Run at
+    /// startup so a broken config fails the deploy instead of the 03:00 import.
+    /// </summary>
+    public static IReadOnlyList<string> Validate(IReadOnlyList<InspireSourceOptions> sources, IReadOnlyCollection<string> reservedSources)
+    {
+        var errors = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in sources)
+        {
+            var name = string.IsNullOrEmpty(s.Source) ? "(no Source)" : s.Source;
+            if (!SourcePattern().IsMatch(s.Source))
+                errors.Add($"{name}: Source must be a lowercase slug ([a-z0-9-]).");
+            else if (reservedSources.Contains(s.Source) || !seen.Add(s.Source))
+                errors.Add($"{name}: Source is used twice; each source's import replaces all rows with that Source.");
+
+            if (string.IsNullOrWhiteSpace(s.DatasetName))
+                errors.Add($"{name}: DatasetName is required.");
+            if (!IsHttpUrl(s.ParcelWfsUrl))
+                errors.Add($"{name}: ParcelWfsUrl must be an absolute http(s) URL.");
+            if (!IsHttpUrl(s.AddressWfsUrl))
+                errors.Add($"{name}: AddressWfsUrl must be an absolute http(s) URL.");
+            if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
+                errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
+
+            var b = s.BoundingBox;
+            if (!(b.MinX < b.MaxX && b.MinY < b.MaxY))
+                errors.Add($"{name}: BoundingBox must have MinX < MaxX and MinY < MaxY.");
+            if (!(s.MinTileSizeMeters > 0 && s.TileSizeMeters >= s.MinTileSizeMeters))
+                errors.Add($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters.");
+            if (s.PageSize < 1)
+                errors.Add($"{name}: PageSize must be positive.");
+            if (s.MaxAttempts < 1)
+                errors.Add($"{name}: MaxAttempts must be at least 1.");
+            if (s.RetryBaseDelaySeconds < 0)
+                errors.Add($"{name}: RetryBaseDelaySeconds must not be negative.");
+            if (s.MinCompleteness is < 0 or > 1)
+                errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
+            if (s.MaxUnmatchedRatio is < 0 or > 1)
+                errors.Add($"{name}: MaxUnmatchedRatio must be between 0 and 1.");
+        }
+        return errors;
+    }
+
+    private static bool IsHttpUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
+
+    [GeneratedRegex(@"epsg(?:::|:|/0/|/)(\d+)$", RegexOptions.IgnoreCase)]
+    private static partial Regex EpsgCodePattern();
+
+    [GeneratedRegex("^[a-z0-9-]+$")]
+    private static partial Regex SourcePattern();
 }
 
 /// <summary>Statewide extent, in the CRS given by <see cref="InspireSourceOptions.Crs"/>, tiled internally for bounded memory use.</summary>

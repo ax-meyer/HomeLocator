@@ -10,187 +10,173 @@ using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
 
+/// <summary>
+/// End to end through orchestrator, importer and bulk writer against Postgres: what lands in
+/// Properties/ImportLogs, and that a failed import leaves the previous data and is retried.
+/// </summary>
 [Collection("Postgres")]
 public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
-    // A single 10x10 bounding box with a 100-unit tile covers the whole box in exactly one
-    // tile, so the parcel/address URLs below are the only ones the importer ever requests.
-    private const string ParcelWfsUrl = "http://fake/parcels";
-    private const string AddressWfsUrl = "http://fake/addresses";
-    private const string Crs = "http://www.opengis.net/def/crs/epsg/0/25832";
+    private const string Source = "sh-test";
     private const string DatasetName = "sh-alkis-test";
-
-    private const string ParcelHitsUrl =
-        $"{ParcelWfsUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames=cp%3ACadastralParcel&resultType=hits";
-    private const string AddressHitsUrl =
-        $"{AddressWfsUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames=ad%3AAddress&resultType=hits";
-    private const string ParcelFetchUrl =
-        $"{ParcelWfsUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames=cp%3ACadastralParcel" +
-        "&bbox=0,0,10,10,http%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2Fepsg%2F0%2F25832&srsName=http%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2Fepsg%2F0%2F25832&count=2000&startIndex=0";
-    private const string AddressFetchUrl =
-        $"{AddressWfsUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames=ad%3AAddress" +
-        "&bbox=0,0,10,10,http%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2Fepsg%2F0%2F25832&srsName=http%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2Fepsg%2F0%2F25832&count=2000&startIndex=0" +
-        "&resolve=local&resolvedepth=2";
-
-    private const string VersionTimestamp = "2:4"; // "{parcelHits}:{addressHits}" from DiscoverAsync
 
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     private static InspireSourceOptions BuildOptions() => new()
     {
-        Source = "sh-test",
+        Source = Source,
         DatasetName = DatasetName,
-        ParcelWfsUrl = ParcelWfsUrl,
-        AddressWfsUrl = AddressWfsUrl,
-        Crs = Crs,
-        BoundingBox = new InspireBoundingBox { MinX = 0, MinY = 0, MaxX = 10, MaxY = 10 },
+        ParcelWfsUrl = FakeWfsServer.ParcelUrl,
+        AddressWfsUrl = FakeWfsServer.AddressUrl,
+        Crs = "urn:ogc:def:crs:EPSG::25832",
+        BoundingBox = new InspireBoundingBox { MinX = 0, MinY = 0, MaxX = 100, MaxY = 100 },
         TileSizeMeters = 100,
-        PageSize = 2000,
+        MinTileSizeMeters = 1,
+        PageSize = 1000,
+        MaxAttempts = 2,
+        RetryBaseDelaySeconds = 0,
     };
 
-    private ImportOrchestrator BuildOrchestrator(FakeHttpMessageHandler handler)
+    private static FakeWfsServer TwoParcelServer()
     {
-        var http = new HttpClient(handler);
+        var server = new FakeWfsServer();
+        server.Parcels.Add(new FakeParcel("P1", 0, 0, 10, 10, 1250.5));
+        server.Parcels.Add(new FakeParcel("P2", 20, 0, 30, 10, 840));
+        server.Addresses.Add(new FakeAddress("A1", 5, 5, "Am Kirchhof", "12"));
+        server.Addresses.Add(new FakeAddress("A2", 25, 5, "Dorfstraße", "4"));
+        return server;
+    }
+
+    private ImportOrchestrator BuildOrchestrator(FakeWfsServer server, Action<InspireSourceOptions>? tweak = null)
+    {
+        var options = BuildOptions();
+        tweak?.Invoke(options);
+
         var httpFactory = A.Fake<IHttpClientFactory>();
-        A.CallTo(() => httpFactory.CreateClient(A<string>._)).Returns(http);
+        A.CallTo(() => httpFactory.CreateClient(A<string>._)).ReturnsLazily(() => new HttpClient(server));
 
         var services = new ServiceCollection();
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(fixture.ConnectionString));
-        var sp = services.BuildServiceProvider();
-        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
 
-        var importer = new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, httpFactory, BuildOptions());
-        var bulkWriter = new PropertyBulkWriter(fixture.DataSource);
-
-        return new ImportOrchestrator([importer], NullLogger<ImportOrchestrator>.Instance, scopeFactory, bulkWriter);
-    }
-
-    private static string ReadFixture(string fileName) =>
-        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Importers", "Inspire", "TestData", fileName));
-
-    private static HttpResponseMessage HitsResponse(long numberMatched) => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent(
-            $"<wfs:FeatureCollection xmlns:wfs=\"http://www.opengis.net/wfs/2.0\" numberMatched=\"{numberMatched}\"/>",
-            Encoding.UTF8, "text/xml"),
-    };
-
-    private static void AddHappyPathRoutes(FakeHttpMessageHandler handler, Action? onFetch = null)
-    {
-        handler.AddRoute(ParcelHitsUrl, () => HitsResponse(2));
-        handler.AddRoute(AddressHitsUrl, () => HitsResponse(4));
-        handler.AddRoute(ParcelFetchUrl, () =>
-        {
-            onFetch?.Invoke();
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ReadFixture("cadastral_parcels.gml"), Encoding.UTF8, "text/xml"),
-            };
-        });
-        handler.AddRoute(AddressFetchUrl, () =>
-        {
-            onFetch?.Invoke();
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ReadFixture("addresses.gml"), Encoding.UTF8, "text/xml"),
-            };
-        });
+        var importer = new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, httpFactory, options);
+        return new ImportOrchestrator([importer], NullLogger<ImportOrchestrator>.Instance, scopeFactory,
+            new PropertyBulkWriter(fixture.DataSource, batchSize: 1));
     }
 
     [Fact]
     public async Task CheckAndImportAsync_ValidData_ImportsSpatiallyJoinedRows()
     {
-        var handler = new FakeHttpMessageHandler();
-        AddHappyPathRoutes(handler);
-
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await BuildOrchestrator(TwoParcelServer()).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
         var properties = await context.Properties.ToListAsync(TestContext.Current.CancellationToken);
-
-        // Address_3_dangling has no containing parcel and Address_4_nopoint has no geometry at
-        // all, so only the two properly-joined addresses should make it through.
-        properties.Should().HaveCount(2);
-        properties.Should().OnlyContain(p => p.Source == "sh-test");
-
-        var kirchhof = properties.Single(p => p.Str == "Am Kirchhof");
-        kirchhof.Hnr.Should().Be("12");
-        kirchhof.Plz.Should().Be("24649");
-        kirchhof.FlaecheAmtl.Should().Be(1250.5);
-
-        var dorfstrasse = properties.Single(p => p.Str == "Dorfstraße");
-        dorfstrasse.Hnr.Should().Be("4");
-        dorfstrasse.HnrZus.Should().Be("a");
-        dorfstrasse.Plz.Should().Be("24601");
-        dorfstrasse.FlaecheAmtl.Should().Be(840.0);
+        properties.Should().HaveCount(2).And.OnlyContain(p => p.Source == Source);
+        properties.Single(p => p.Str == "Am Kirchhof").FlaecheAmtl.Should().Be(1250.5);
+        properties.Single(p => p.Str == "Dorfstraße").FlaecheAmtl.Should().Be(840);
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_CreatesOneImportLogForTheWholeState()
+    public async Task CheckAndImportAsync_ValidData_CompletesOneImportLogForTheWholeState()
     {
-        var handler = new FakeHttpMessageHandler();
-        AddHappyPathRoutes(handler);
-
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await BuildOrchestrator(TwoParcelServer()).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        var logs = await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken);
-
-        // Exactly one ImportLog for the whole run (not one per tile) — PropertyBulkWriter
-        // deletes all of a source's rows per call, so multiple candidates would be destructive.
-        logs.Should().ContainSingle();
-        var log = logs[0];
-        log.Source.Should().Be("sh-test");
+        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        log.Source.Should().Be(Source);
         log.DatasetName.Should().Be(DatasetName);
         log.FileName.Should().Be("statewide");
-        log.FileTimestamp.Should().Be(VersionTimestamp);
+        log.FileTimestamp.Should().StartWith("2:2:", "the version is parcel hits, address hits and the month");
         log.RecordCount.Should().Be(2);
+        log.CompletedAt.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_AlreadyImported_SkipsFetch()
+    public async Task CheckAndImportAsync_AlreadyCompleted_SkipsFetch()
+    {
+        var server = TwoParcelServer();
+        await BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        server.Requests.Clear();
+
+        await BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        server.GetFeatureRequests(FakeWfsServer.ParcelUrl).Should().BeEmpty("the same version was already imported");
+    }
+
+    [Fact]
+    public async Task CheckAndImportAsync_FailedImport_KeepsPreviousRowsAndRetriesNextRun()
     {
         await using (var context = fixture.CreateContext())
         {
-            context.ImportLogs.Add(new ImportLog
+            context.Properties.Add(new Property
             {
-                Source = "sh-test",
-                DatasetName = DatasetName,
-                FileName = "statewide",
-                FileTimestamp = VersionTimestamp,
-                ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                RecordCount = 2,
+                Str = "Alte Straße", Hnr = "1", FlaecheAmtl = 1, Source = Source,
+                ImportLog = new ImportLog
+                {
+                    Source = Source, DatasetName = DatasetName, FileName = "statewide", FileTimestamp = "old",
+                    ImportedAt = 1, RecordCount = 1, CompletedAt = 1,
+                },
             });
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        var fetchCalled = false;
-        var handler = new FakeHttpMessageHandler();
-        AddHappyPathRoutes(handler, onFetch: () => fetchCalled = true);
+        // First run: two tiles; the first one's rows are staged, then the address service goes
+        // down for the second tile.
+        var server = TwoParcelServer();
+        server.Parcels.Add(new FakeParcel("P3", 60, 0, 70, 10, 500));
+        server.Addresses.Add(new FakeAddress("A3", 65, 5, "Waldweg", "7"));
+        server.Interceptor = (uri, _) => uri.ToString().StartsWith(FakeWfsServer.AddressUrl, StringComparison.Ordinal)
+                                         && uri.Query.Contains("bbox=50")
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : null;
+        void TwoTiles(InspireSourceOptions o) => o.TileSizeMeters = 50;
+        await BuildOrchestrator(server, TwoTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await using (var context = fixture.CreateContext())
+        {
+            (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
+                .Should().Equal(["Alte Straße"], "a failed import must not replace the previous data");
+            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp != "old", TestContext.Current.CancellationToken);
+            failed.CompletedAt.Should().BeNull();
+        }
+        await AssertStagingEmptyAsync();
 
-        fetchCalled.Should().BeFalse("GetFeature should not be requested when the hits-based version was already imported");
+        // Next run: the service is back; the same version is retried, reusing its ImportLog row.
+        server.Interceptor = null;
+        await BuildOrchestrator(server, TwoTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await using (var context = fixture.CreateContext())
+        {
+            (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
+                .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße", "Waldweg"]);
+            var logs = await context.ImportLogs.Where(l => l.FileTimestamp != "old").ToListAsync(TestContext.Current.CancellationToken);
+            logs.Should().ContainSingle().Which.CompletedAt.Should().NotBeNull();
+        }
     }
 
     [Fact]
     public async Task CheckAndImportAsync_HitsRequestFails_DoesNotThrow()
     {
-        var handler = new FakeHttpMessageHandler();
-        handler.AddRoute(ParcelHitsUrl, () => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-        handler.AddRoute(AddressHitsUrl, () => HitsResponse(4));
+        var server = TwoParcelServer();
+        server.Interceptor = (uri, _) => uri.Query.Contains("resultType=hits")
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("", Encoding.UTF8) }
+            : null;
 
-        var orchestrator = BuildOrchestrator(handler);
-        var act = () => orchestrator.CheckAndImportAsync();
+        var act = () => BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await act.Should().NotThrowAsync();
+    }
+
+    private async Task AssertStagingEmptyAsync()
+    {
+        await using var conn = await fixture.DataSource.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using var count = new NpgsqlCommand("SELECT count(*) FROM \"PropertyStaging\"", conn);
+        ((long)(await count.ExecuteScalarAsync(TestContext.Current.CancellationToken))!).Should().Be(0, "a failed import's staged rows are discarded");
     }
 }

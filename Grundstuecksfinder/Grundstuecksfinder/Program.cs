@@ -33,15 +33,28 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 
 // ── Property importers ────────────────────────────────────────────────────────
 // Add a new Bundesland/country by implementing IPropertyImporter and registering it here.
+// Every source can be switched off with "Enabled": false, which stops its imports and hides
+// its rows (see DisabledSources) without deleting them.
+var nrwEnabled = builder.Configuration.GetSection("Import:Nrw").Get<NrwImporterOptions>()?.Enabled ?? true;
 builder.Services.Configure<NrwImporterOptions>(builder.Configuration.GetSection("Import:Nrw"));
-builder.Services.AddScoped<IPropertyImporter, NrwPropertyImporter>();
+if (nrwEnabled)
+    builder.Services.AddScoped<IPropertyImporter, NrwPropertyImporter>();
 
 // One IPropertyImporter per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
-// adding a state is adding an "Import:Inspire:Sources" entry, no new code. "Enabled": false
-// stops its imports and hides its rows (see DisabledSources) without deleting them.
+// adding a state is adding an "Import:Inspire:Sources" entry, no new code. A broken entry
+// fails startup (and so the deploy) instead of the nightly import.
 var inspireSources = builder.Configuration.GetSection("Import:Inspire:Sources").Get<List<InspireSourceOptions>>() ?? [];
+var inspireConfigErrors = InspireSourceOptions.Validate(inspireSources, [NrwPropertyImporter.SourceId]);
+if (inspireConfigErrors.Count > 0)
+    throw new InvalidOperationException("Invalid Import:Inspire:Sources config:\n" + string.Join("\n", inspireConfigErrors));
+
 builder.Services.AddSingleton(new DisabledSources(
-    inspireSources.Where(s => !s.Enabled).Select(s => s.Source).ToList()));
+    inspireSources.Where(s => !s.Enabled).Select(s => s.Source)
+        .Concat(nrwEnabled ? [] : [NrwPropertyImporter.SourceId])
+        .ToList()));
+builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
+    // Big GetFeature responses from slow servers can take minutes; retries handle the rest.
+    client.Timeout = TimeSpan.FromMinutes(5));
 foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
     builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(

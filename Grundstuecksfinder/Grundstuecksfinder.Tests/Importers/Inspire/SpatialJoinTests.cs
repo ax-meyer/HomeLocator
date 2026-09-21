@@ -9,7 +9,7 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 /// Exercises the point-in-polygon join in isolation (no HTTP, no WFS) — synthetic squares and
 /// points chosen to cover containment, misses, and shared-edge ambiguity.
 /// </summary>
-public class SpatialJoinTests
+public sealed class SpatialJoinTests
 {
     private static readonly GeometryFactory Factory = new();
 
@@ -63,5 +63,32 @@ public class SpatialJoinTests
         var index = new ParcelSpatialIndex();
 
         index.FindContainingParcelArea(PointAt(0, 0)).Should().BeNull();
+    }
+
+    [Fact]
+    public void FindContainingParcelArea_MultiPartParcel_MatchesAddressInAnyPart()
+    {
+        var index = new ParcelSpatialIndex();
+        index.Add(Factory.CreateMultiPolygon([Square(0, 0, 10), Square(50, 0, 10)]), 300);
+
+        index.FindContainingParcelArea(PointAt(55, 5)).Should().Be(300, "the address lies in the parcel's second part");
+    }
+
+    [Fact]
+    public void FindContainingParcelArea_OverlappingParcels_SmallestContainingParcelWins()
+    {
+        // Faulty cadastral data can overlap; the result must not depend on insertion order.
+        var big = Square(0, 0, 100);
+        var small = Square(40, 40, 10);
+
+        var bigFirst = new ParcelSpatialIndex();
+        bigFirst.Add(big, 10_000);
+        bigFirst.Add(small, 100);
+        var smallFirst = new ParcelSpatialIndex();
+        smallFirst.Add(small, 100);
+        smallFirst.Add(big, 10_000);
+
+        bigFirst.FindContainingParcelArea(PointAt(45, 45)).Should().Be(100);
+        smallFirst.FindContainingParcelArea(PointAt(45, 45)).Should().Be(100);
     }
 }

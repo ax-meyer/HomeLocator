@@ -135,17 +135,19 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
     [Fact]
     public async Task CheckAndImportAsync_AlreadyImported_SkipsImport()
     {
-        // Pre-populate the import log with the same timestamp
+        // Pre-populate the import log with a completed import of the same timestamp
         await using (var context = fixture.CreateContext())
         {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             context.ImportLogs.Add(new Grundstuecksfinder.Models.ImportLog
             {
                 Source = NrwPropertyImporter.SourceId,
                 DatasetName = DatasetName,
                 FileName = ZipFileName,
                 FileTimestamp = ZipTimestamp,
-                ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                RecordCount = 999
+                ImportedAt = now,
+                RecordCount = 999,
+                CompletedAt = now,
             });
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
