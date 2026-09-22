@@ -61,8 +61,8 @@ public sealed class PostcodeAreaIndex : IPostcodeLookup
                 var feature = serializer.Deserialize<IFeature>(reader);
                 if (feature?.Geometry is not (Polygon or MultiPolygon) || !feature.Geometry.EnvelopeInternal.Intersects(filter))
                     continue;
-                var postcode = feature.Attributes?.GetOptionalValue("postcode") as string;
-                if (postcode is not { Length: 5 } || !postcode.All(char.IsAsciiDigit))
+                var postcode = PostalCode.Normalize(feature.Attributes?.GetOptionalValue("postcode") as string);
+                if (postcode is null)
                     continue;
 
                 index._tree.Insert(feature.Geometry.EnvelopeInternal,

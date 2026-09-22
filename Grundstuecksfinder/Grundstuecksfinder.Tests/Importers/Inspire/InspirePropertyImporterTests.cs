@@ -421,6 +421,18 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
+    public async Task FetchAsync_FillMissingPlz_ReplacesAPublishedPlzThatIsNoPlz()
+    {
+        var server = new FakeWfsServer();
+        server.Parcels.Add(new FakeParcel("P1", 0, 0, 10, 10, 500));
+        server.Addresses.Add(new FakeAddress("A1", 5, 5, "Prenzlauer Chaussee", "1", Plz: "Wandlitz"));
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.FillMissingPlzFromPostcodeAreas = true), postcodeAreas: StripPostcodeAreas()));
+
+        rows.Should().ContainSingle().Which.Plz.Should().Be("10000");
+    }
+
+    [Fact]
     public async Task FetchAsync_TooFewAddressesInAnyArea_Fails()
     {
         var server = GridServer(10); // x = 5 … 95: the column at 95 lies outside every area (10 %)
