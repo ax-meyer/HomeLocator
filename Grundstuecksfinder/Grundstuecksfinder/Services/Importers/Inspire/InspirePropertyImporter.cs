@@ -41,7 +41,8 @@ public partial class InspirePropertyImporter(
     IHttpClientFactory httpClientFactory,
     InspireSourceOptions options,
     TimeProvider? timeProvider = null,
-    IPostcodeAreaProvider? postcodeAreas = null) : IPropertyImporter
+    IPostcodeAreaProvider? postcodeAreas = null,
+    ILoggerFactory? loggerFactory = null) : IPropertyImporter
 {
     /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
     public const string HttpClientName = "Inspire";
@@ -404,8 +405,14 @@ public partial class InspirePropertyImporter(
     /// tiles; innermost a per-attempt timeout that also bounds reading and parsing the body,
     /// which HttpClient.Timeout stops covering once the headers have arrived.
     /// </summary>
-    private ResiliencePipeline BuildPipeline() =>
-        new ResiliencePipelineBuilder { TimeProvider = _time, Name = $"inspire:{Source}" }
+    private ResiliencePipeline BuildPipeline()
+    {
+        var builder = new ResiliencePipelineBuilder { TimeProvider = _time, Name = $"inspire:{Source}" };
+        // Polly's own logs and metrics (meter "Polly", tagged with the pipeline name), next to
+        // the app's meter in AppMetrics. Left off when no factory is available, e.g. in tests.
+        if (loggerFactory is not null)
+            builder.ConfigureTelemetry(loggerFactory);
+        return builder
             .AddRetry(new RetryStrategyOptions
             {
                 ShouldHandle = args => ValueTask.FromResult(IsTransient(args.Outcome.Exception)),
@@ -454,6 +461,7 @@ public partial class InspirePropertyImporter(
                 Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds),
             })
             .Build();
+    }
 
     /// <summary>
     /// Network errors, timeouts (an OperationCanceledException the caller didn't ask for),

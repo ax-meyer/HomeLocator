@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Xml.Linq;
 using FakeItEasy;
@@ -7,6 +8,7 @@ using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NetTopologySuite.Geometries;
@@ -46,11 +48,12 @@ public sealed class InspirePropertyImporterTests
     }
 
     private static InspirePropertyImporter Importer(
-        FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null, IPostcodeAreaProvider? postcodeAreas = null)
+        FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null,
+        IPostcodeAreaProvider? postcodeAreas = null, ILoggerFactory? loggerFactory = null)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
-        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas);
+        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas, loggerFactory);
     }
 
     /// <summary>
@@ -235,6 +238,29 @@ public sealed class InspirePropertyImporterTests
 
         await act.Should().ThrowAsync<BrokenCircuitException>();
         requests.Should().BeLessThan(40, "the circuit opens long before all 100 tiles have been tried");
+    }
+
+    [Fact]
+    public async Task FetchAsync_WithLoggerFactory_ReportsRetriesAsPollyTelemetry()
+    {
+        var server = GridServer(2);
+        var failed = false;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!IsAddressGetFeature(uri) || failed) return null;
+            failed = true;
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        };
+
+        using var meterReader = new MeterReader("Polly");
+
+        var rows = await FetchAllAsync(Importer(server, Options(), loggerFactory: NullLoggerFactory.Instance));
+
+        rows.Should().HaveCount(4);
+        meterReader.Instruments.Should().Contain("resilience.polly.strategy.attempt.duration",
+            "the pipeline is wired to Polly's meter, so retries show up next to the app's own metrics");
+        meterReader.Tags.Should().Contain(t => t.Key == "pipeline.name" && (string?)t.Value == "inspire:test",
+            "the measurements name the source whose server failed");
     }
 
     [Fact]
@@ -573,5 +599,32 @@ public sealed class InspirePropertyImporterTests
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
             ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    }
+
+    /// <summary>Records which instruments of a meter were written to, and with what tags.</summary>
+    private sealed class MeterReader : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        public List<string> Instruments { get; } = [];
+        public List<KeyValuePair<string, object?>> Tags { get; } = [];
+
+        public MeterReader(string meterName)
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == meterName) listener.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+            {
+                lock (Instruments)
+                {
+                    Instruments.Add(instrument.Name);
+                    Tags.AddRange(tags.ToArray());
+                }
+            });
+            _listener.Start();
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }
