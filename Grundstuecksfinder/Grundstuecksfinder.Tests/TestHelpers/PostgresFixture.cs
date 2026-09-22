@@ -26,9 +26,10 @@ public sealed class PostgresFixture : IAsyncLifetime
         await _container.StartAsync();
         DataSource = NpgsqlDataSource.Create(ConnectionString);
 
-        // Apply schema once
+        // Apply the real migrations once, so tests run against the production schema
+        // (including tables created by raw SQL, like PropertyStaging).
         await using var context = CreateContext();
-        await context.Database.EnsureCreatedAsync();
+        await context.Database.MigrateAsync();
     }
 
     public async ValueTask DisposeAsync()
@@ -49,7 +50,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     {
         await using var context = CreateContext();
         await context.Database.ExecuteSqlRawAsync(
-            "TRUNCATE TABLE \"Properties\", \"ImportLogs\" RESTART IDENTITY");
+            "TRUNCATE TABLE \"Properties\", \"ImportLogs\", \"PropertyStaging\" RESTART IDENTITY");
     }
 }
 

@@ -5,9 +5,9 @@
 @using Grundstuecksfinder.Services
 @using Grundstuecksfinder.Models
 
-<PageTitle>Grundstücksfinder NRW</PageTitle>
+<PageTitle>Grundstücksfinder</PageTitle>
 
-<h1 class="mb-1">Grundstücksfinder NRW</h1>
+<h1 class="mb-1">Grundstücksfinder</h1>
 <p class="text-muted mb-3">
     Finde die Adresse eines Grundstücks oder Hauses anhand von PLZ / Gemeinde und Grundstücksgröße.
 </p>
@@ -22,8 +22,8 @@
 else
 {
     <p class="text-muted small mb-3">
-        Daten vom @DateTimeOffset.FromUnixTimeMilliseconds(_lastImport.ImportedAt).ToLocalTime().ToString("dd.MM.yyyy, HH:mm") Uhr
-        · @_lastImport.RecordCount.ToString("N0") Einträge
+        Letzter Import: @DateTimeOffset.FromUnixTimeMilliseconds(_lastImport.ImportedAt).ToLocalTime().ToString("dd.MM.yyyy, HH:mm") Uhr
+        · @_totalCount.ToString("N0") Einträge
     </p>
 }
 
@@ -108,6 +108,7 @@ else
     private bool _searched;
     private bool _loading;
     private ImportLog? _lastImport;
+    private long _totalCount;
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
 
     private List<string> _plzOptions = [];
@@ -119,6 +120,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         _lastImport = await PropertyService.GetLastImportAsync();
+        _totalCount = await PropertyService.GetTotalPropertyCountAsync();
         _plzOptions = await PropertyService.GetDistinctPlzAsync();
         _gemeindeOptions = await PropertyService.GetDistinctGemeindenAsync();
     }

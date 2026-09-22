@@ -5,9 +5,10 @@ using Microsoft.EntityFrameworkCore;
 namespace Grundstuecksfinder.Services.Importers;
 
 /// <summary>
-/// Loops every registered <see cref="IPropertyImporter"/>, skipping candidates already
-/// recorded in <see cref="ImportLog"/> for that source, and writes new ones via
-/// <see cref="PropertyBulkWriter"/>. Adding a region is registering another
+/// Loops every registered <see cref="IPropertyImporter"/>, skipping candidates whose import
+/// already completed (see <see cref="ImportLog.CompletedAt"/>), and writes new ones via
+/// <see cref="PropertyBulkWriter"/>. One source failing never stops the others; only
+/// cancellation of the whole run propagates. Adding a region is registering another
 /// <see cref="IPropertyImporter"/> in DI — this class needs no changes.
 /// </summary>
 public partial class ImportOrchestrator(
@@ -24,11 +25,9 @@ public partial class ImportOrchestrator(
             {
                 await RunImporterAsync(importer, ct);
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
+            // An HttpClient timeout is also an OperationCanceledException; only a cancelled run
+            // may propagate, anything else is this source's failure.
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 LogDiscoveryFailed(logger, ex, importer.Source);
             }
@@ -46,54 +45,55 @@ public partial class ImportOrchestrator(
 
         foreach (var candidate in candidates)
         {
-            var alreadyImported = await context.ImportLogs.AnyAsync(
+            var existing = await context.ImportLogs.FirstOrDefaultAsync(
                 l => l.Source == importer.Source &&
                      l.DatasetName == candidate.DatasetName &&
                      l.FileName == candidate.FileName &&
                      l.FileTimestamp == candidate.VersionTimestamp, ct);
 
-            if (alreadyImported)
+            if (existing?.CompletedAt is not null)
             {
                 LogAlreadyImported(logger, importer.Source, candidate.DatasetName, candidate.FileName);
                 continue;
             }
 
-            await ImportCandidateAsync(importer, candidate, context, ct);
+            await ImportCandidateAsync(importer, candidate, existing, context, ct);
         }
     }
 
-    private async Task ImportCandidateAsync(IPropertyImporter importer, ImportCandidate candidate, AppDbContext context, CancellationToken ct)
+    private const int MaxErrorLength = 2000;
+
+    private async Task ImportCandidateAsync(
+        IPropertyImporter importer, ImportCandidate candidate, ImportLog? failedEarlier, AppDbContext context, CancellationToken ct)
     {
-        // Create the ImportLog first so its ID is available for the COPY command.
-        var importLog = new ImportLog
+        // Create (or, for a retry of a failed version, reuse) the ImportLog first so its ID is
+        // available for the swap into Properties. It stays incomplete until the swap commits.
+        var importLog = failedEarlier ?? context.ImportLogs.Add(new ImportLog
         {
             Source = importer.Source,
             DatasetName = candidate.DatasetName,
             FileName = candidate.FileName,
             FileTimestamp = candidate.VersionTimestamp,
-            ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            RecordCount = 0,
-        };
-        context.ImportLogs.Add(importLog);
+        }).Entity;
+        importLog.ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        importLog.RecordCount = 0;
+        importLog.LastError = null;
         await context.SaveChangesAsync(ct);
 
         try
         {
             LogImporting(logger, importer.Source, candidate.DatasetName, candidate.FileName);
 
+            // Marks the ImportLog completed in the same transaction that swaps the rows in.
             var count = await bulkWriter.WriteAsync(importer.Source, importer.FetchAsync(candidate, ct), importLog.Id, ct);
-
-            importLog.RecordCount = count;
-            await context.SaveChangesAsync(ct);
             LogImportComplete(logger, importer.Source, count);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             LogImportFailed(logger, ex, importer.Source, candidate.DatasetName, candidate.FileName);
+            // Surfaced by the import health check until a later attempt succeeds.
+            importLog.LastError = ex.Message.Length <= MaxErrorLength ? ex.Message : ex.Message[..MaxErrorLength];
+            await context.SaveChangesAsync(ct);
         }
     }
 

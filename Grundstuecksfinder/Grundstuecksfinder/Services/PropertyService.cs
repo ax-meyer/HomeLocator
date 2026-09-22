@@ -4,8 +4,25 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Grundstuecksfinder.Services;
 
-public class PropertyService(AppDbContext context)
+public class PropertyService(AppDbContext context, DisabledSources disabledSources)
 {
+    // Without disabled sources, skip the filter entirely: even an empty NOT IN can keep
+    // Postgres from using index-only scans for the DISTINCT Gemeinde/PLZ lists.
+    private IQueryable<Property> VisibleProperties => disabledSources.Names.Count == 0
+        ? context.Properties
+        : context.Properties.Where(p => !disabledSources.Names.Contains(p.Source));
+
+    private IQueryable<ImportLog> VisibleCompletedImports
+    {
+        get
+        {
+            var completed = context.ImportLogs.Where(l => l.CompletedAt != null && l.RecordCount > 0);
+            return disabledSources.Names.Count == 0
+                ? completed
+                : completed.Where(l => !disabledSources.Names.Contains(l.Source));
+        }
+    }
+
     public async Task<List<Property>> GetPropertiesAsync(
         string? gemeinde = null,
         string? plz = null,
@@ -13,7 +30,7 @@ public class PropertyService(AppDbContext context)
         double? maxFlaeche = null,
         int limit = 500)
     {
-        var query = context.Properties.AsQueryable();
+        var query = VisibleProperties;
 
         if (!string.IsNullOrWhiteSpace(gemeinde))
             query = query.Where(p => p.Gemeinde == gemeinde);
@@ -31,7 +48,7 @@ public class PropertyService(AppDbContext context)
     }
 
     public async Task<List<string>> GetDistinctGemeindenAsync() =>
-        await context.Properties
+        await VisibleProperties
             .Where(p => p.Gemeinde != null)
             .Select(p => p.Gemeinde!)
             .Distinct()
@@ -39,7 +56,7 @@ public class PropertyService(AppDbContext context)
             .ToListAsync();
 
     public async Task<List<string>> GetDistinctPlzAsync() =>
-        await context.Properties
+        await VisibleProperties
             .Where(p => p.Plz != null)
             .Select(p => p.Plz!)
             .Distinct()
@@ -47,7 +64,22 @@ public class PropertyService(AppDbContext context)
             .ToListAsync();
 
     public async Task<ImportLog?> GetLastImportAsync() =>
-        await context.ImportLogs
+        await VisibleCompletedImports
             .OrderByDescending(l => l.ImportedAt)
             .FirstOrDefaultAsync();
+
+    /// <summary>
+    /// Every import replaces its source's rows, so the latest completed import per source holds
+    /// that source's row count. Read from the small ImportLogs table instead of counting millions
+    /// of Properties on every page load.
+    /// </summary>
+    public async Task<long> GetTotalPropertyCountAsync()
+    {
+        var imports = await VisibleCompletedImports
+            .Select(l => new { l.Source, l.CompletedAt, l.RecordCount })
+            .ToListAsync();
+        return imports
+            .GroupBy(l => l.Source)
+            .Sum(g => g.MaxBy(l => l.CompletedAt)!.RecordCount);
+    }
 }

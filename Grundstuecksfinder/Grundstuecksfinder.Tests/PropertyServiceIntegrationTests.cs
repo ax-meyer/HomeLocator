@@ -37,7 +37,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetPropertiesAsync(plz: "50667");
 
@@ -58,7 +58,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetPropertiesAsync(minFlaeche: 400, maxFlaeche: 600);
 
@@ -70,7 +70,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     public async Task GetLastImportAsync_NoLogs_ReturnsNull()
     {
         await using var context = fixture.CreateContext();
-        var service = new PropertyService(context);
+        var service = new PropertyService(context, DisabledSources.None);
 
         var result = await service.GetLastImportAsync();
 
@@ -85,17 +85,82 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
 
         await using var context = fixture.CreateContext();
         context.ImportLogs.AddRange(
-            new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10 },
-            new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20 }
+            new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10, CompletedAt = older },
+            new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20, CompletedAt = newer },
+            // Newest, but still running (or failed): not the "last import" shown to users.
+            new ImportLog { DatasetName = "ds1", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = newer + 1, RecordCount = 0 }
         );
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
-        var service = new PropertyService(queryContext);
+        var service = new PropertyService(queryContext, DisabledSources.None);
 
         var result = await service.GetLastImportAsync();
 
         result.Should().NotBeNull();
         result!.RecordCount.Should().Be(20);
+    }
+
+    [Fact]
+    public async Task DisabledSource_IsHiddenFromSearchFiltersAndCounts()
+    {
+        await using var context = fixture.CreateContext();
+        var nrwLog = NewImportLog();
+        nrwLog.Source = "nrw";
+        nrwLog.RecordCount = 1;
+        nrwLog.CompletedAt = 1;
+        var heLog = NewImportLog();
+        heLog.Source = "he";
+        heLog.FileName = "he.zip";
+        heLog.RecordCount = 1;
+        heLog.CompletedAt = 1;
+        context.Properties.AddRange(
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Gemeinde = "Köln", FlaecheAmtl = 500, Source = "nrw", ImportLog = nrwLog },
+            new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", FlaecheAmtl = 500, Source = "he", ImportLog = heLog });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, new DisabledSources(["he"]));
+
+        (await service.GetPropertiesAsync(minFlaeche: 100)).Should().ContainSingle().Which.Source.Should().Be("nrw");
+        (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
+        (await service.GetDistinctPlzAsync()).Should().Equal("50667");
+        (await service.GetTotalPropertyCountAsync()).Should().Be(1);
+        (await service.GetLastImportAsync())!.Source.Should().Be("nrw");
+    }
+
+    [Fact]
+    public async Task DisabledSource_WithOnlyItsImportCompleted_HasNoLastImport()
+    {
+        await using var context = fixture.CreateContext();
+        context.ImportLogs.AddRange(
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "nrw.zip", FileTimestamp = "ts", ImportedAt = 1, RecordCount = 0 },
+            new ImportLog { Source = "he", DatasetName = "ds", FileName = "he.zip", FileTimestamp = "ts", ImportedAt = 2, RecordCount = 5, CompletedAt = 2 });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, new DisabledSources(["he"]));
+
+        (await service.GetLastImportAsync()).Should().BeNull("the only non-empty import belongs to the disabled source");
+        (await service.GetTotalPropertyCountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetTotalPropertyCountAsync_SumsLatestCompletedImportPerSource()
+    {
+        await using var context = fixture.CreateContext();
+        context.ImportLogs.AddRange(
+            // Superseded by the newer nrw import, which replaced its rows.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 1, RecordCount = 100, CompletedAt = 1 },
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = 3, RecordCount = 120, CompletedAt = 3 },
+            // Failed attempt: its rows were never swapped in.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = 4, RecordCount = 0 },
+            new ImportLog { Source = "sh", DatasetName = "ds", FileName = "sh", FileTimestamp = "ts1", ImportedAt = 2, RecordCount = 30, CompletedAt = 2 });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, DisabledSources.None);
+
+        (await service.GetTotalPropertyCountAsync()).Should().Be(150);
     }
 }

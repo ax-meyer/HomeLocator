@@ -1,6 +1,7 @@
 @using Grundstuecksfinder.Models
 @using Grundstuecksfinder.Services
 @inject AppMetrics AppMetrics
+@inject IJSRuntime JS
 
 @* Inline expansion panel shown below a clicked result row. *@
 
@@ -19,14 +20,24 @@
                @onclick="ClickOsm">
                 OpenStreetMap
             </a>
-            <a href="@LaermUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
-               @onclick="ClickLaerm">
-                NRW Lärmkarte
-            </a>
-            <a href="@HochwasserUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
-               @onclick="ClickHochwasser">
-                NRW Hochwasserkarte
-            </a>
+            @if (LaermUrl is not null)
+            {
+                <a href="@LaermUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+                   @onclick="ClickLaerm">
+                    Lärmkarte
+                </a>
+            }
+            @if (HochwasserUrl is not null)
+            {
+                <a href="@HochwasserUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+                   @onclick="ClickHochwasser">
+                    Hochwasserkarte
+                </a>
+            }
+
+            <button class="btn btn-sm btn-outline-primary" @onclick="CopyAddress">
+                @(_copyStatus ?? "Adresse kopieren")
+            </button>
         </div>
     </div>
 </div>
@@ -43,21 +54,63 @@
                 new[] { $"{Property.Str} {Property.Hnr}{Property.HnrZus}", Property.Plz, Property.Ort }
                     .Where(s => !string.IsNullOrWhiteSpace(s))));
 
+    // Use FormattableString.Invariant to ensure dots as decimal separators in URLs,
+    // regardless of the server's culture (e.g. German locale uses commas).
     private string GoogleMapsUrl => Coords != default
-        ? $"https://www.google.com/maps?q={Coords.Lat},{Coords.Lon}"
+        ? FormattableString.Invariant($"https://www.google.com/maps?q={Coords.Lat},{Coords.Lon}")
         : $"https://www.google.com/maps/search/{AddressQuery}";
 
     private string OsmUrl => Coords != default
-        ? $"https://www.openstreetmap.org/?mlat={Coords.Lat}&mlon={Coords.Lon}&zoom=17"
+        ? FormattableString.Invariant($"https://www.openstreetmap.org/?mlat={Coords.Lat}&mlon={Coords.Lon}&zoom=17")
         : $"https://www.openstreetmap.org/search?query={AddressQuery}";
 
-    private string LaermUrl => Coords != default
-        ? $"https://www.umgebungslaerm-kartierung.nrw.de/#map=15/{Coords.Lon}/{Coords.Lat}"
-        : "https://www.umgebungslaerm-kartierung.nrw.de/";
+    private string? LaermUrl => Property.Source switch
+    {
+        "nrw" => Coords != default
+            ? FormattableString.Invariant($"https://www.umgebungslaerm-kartierung.nrw.de/#map=15/{Coords.Lon}/{Coords.Lat}")
+            : "https://www.umgebungslaerm-kartierung.nrw.de/",
+        _ => null,
+    };
 
-    private string HochwasserUrl => Coords != default
-        ? $"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15"
-        : "https://www.hochwasserkarten.nrw.de/";
+    private string? HochwasserUrl => Property.Source switch
+    {
+        "nrw" => Coords != default
+            ? FormattableString.Invariant($"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15")
+            : "https://www.hochwasserkarten.nrw.de/",
+        _ => null,
+    };
+
+    private string DisplayAddress =>
+        string.Join(", ",
+            new[] { $"{Property.Str} {Property.Hnr}{Property.HnrZus}".Trim(), Property.Plz, Property.Ort }
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    private string? _copyStatus;
+
+    private async Task CopyAddress()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", DisplayAddress);
+            _copyStatus = "✓ Kopiert";
+        }
+        // The Clipboard API only exists in secure contexts (HTTPS) and the browser may deny it;
+        // an unhandled exception here would tear down the whole Blazor circuit.
+        catch (JSException)
+        {
+            _copyStatus = "Kopieren nicht möglich";
+        }
+        // The user left the page mid-call: nothing left to update.
+        catch (JSDisconnectedException)
+        {
+            return;
+        }
+
+        StateHasChanged();
+        await Task.Delay(1500);
+        _copyStatus = null;
+        StateHasChanged();
+    }
 
     private void ClickGoogle()     => AppMetrics.RecordOutgoingClick("google");
     private void ClickOsm()        => AppMetrics.RecordOutgoingClick("osm");

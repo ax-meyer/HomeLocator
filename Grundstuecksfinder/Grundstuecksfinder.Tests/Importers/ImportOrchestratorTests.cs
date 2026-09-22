@@ -94,8 +94,69 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         (await context.Properties.CountAsync(p => p.Source == "ok", TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
+    [Fact]
+    public async Task CheckAndImportAsync_ImporterTimesOut_IsTreatedAsThatSourcesFailure()
+    {
+        // HttpClient reports a timeout as TaskCanceledException, an OperationCanceledException.
+        // Unless the run itself was cancelled, it must not escape and stop the host.
+        var timingOut = new ThrowingPropertyImporter("slow", new TaskCanceledException("HttpClient timeout"));
+        var working = new StubPropertyImporter("ok", "ds", "file", "2026-01-01", [MakeProperty("ok")]);
+
+        var act = () => BuildOrchestrator(timingOut, working).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await act.Should().NotThrowAsync();
+        await using var context = fixture.CreateContext();
+        (await context.Properties.CountAsync(p => p.Source == "ok", TestContext.Current.CancellationToken)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CheckAndImportAsync_RunCancelled_Propagates()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var importer = new StubPropertyImporter("a", "ds", "file", "2026-01-01", [MakeProperty("a")]);
+
+        var act = () => BuildOrchestrator(importer).CheckAndImportAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task CheckAndImportAsync_FetchFailsMidway_KeepsPreviousRowsAndRetriesNextRun()
+    {
+        await BuildOrchestrator(new StubPropertyImporter("a", "ds", "file", "v1", [MakeProperty("a", "Alt")]))
+            .CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        var failing = new StubPropertyImporter("a", "ds", "file", "v2",
+            [MakeProperty("a", "Neu 1"), MakeProperty("a", "Neu 2")], failAfter: 1);
+        await BuildOrchestrator(failing).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await using (var context = fixture.CreateContext())
+        {
+            (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
+                .Should().Equal(["Alt"], "a failed import must not replace the previous data");
+            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            failed.CompletedAt.Should().BeNull();
+            failed.LastError.Should().Contain("upstream failed midway");
+        }
+
+        var fixedImporter = new StubPropertyImporter("a", "ds", "file", "v2",
+            [MakeProperty("a", "Neu 1"), MakeProperty("a", "Neu 2")]);
+        await BuildOrchestrator(fixedImporter).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await using (var context = fixture.CreateContext())
+        {
+            (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
+                .Should().BeEquivalentTo(["Neu 1", "Neu 2"], "the failed version is retried, not skipped as already imported");
+            var retried = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            retried.CompletedAt.Should().NotBeNull();
+            retried.LastError.Should().BeNull();
+        }
+    }
+
     private sealed class StubPropertyImporter(
-        string source, string datasetName, string fileName, string versionTimestamp, List<Property> properties) : IPropertyImporter
+        string source, string datasetName, string fileName, string versionTimestamp, List<Property> properties,
+        int? failAfter = null) : IPropertyImporter
     {
         public string Source => source;
 
@@ -104,21 +165,24 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
 
         public async IAsyncEnumerable<Property> FetchAsync(ImportCandidate candidate, [EnumeratorCancellation] CancellationToken ct)
         {
+            var yielded = 0;
             foreach (var p in properties)
             {
                 ct.ThrowIfCancellationRequested();
                 await Task.Yield();
+                if (yielded++ == failAfter)
+                    throw new HttpRequestException("upstream failed midway");
                 yield return p;
             }
         }
     }
 
-    private sealed class ThrowingPropertyImporter(string source) : IPropertyImporter
+    private sealed class ThrowingPropertyImporter(string source, Exception? exception = null) : IPropertyImporter
     {
         public string Source => source;
 
         public Task<IReadOnlyList<ImportCandidate>> DiscoverAsync(CancellationToken ct) =>
-            throw new InvalidOperationException("discovery boom");
+            throw exception ?? new InvalidOperationException("discovery boom");
 
         public IAsyncEnumerable<Property> FetchAsync(ImportCandidate candidate, CancellationToken ct) =>
             throw new NotSupportedException();
