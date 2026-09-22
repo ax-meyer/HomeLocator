@@ -17,9 +17,12 @@ public partial class WfsLiveEndpointTests
         int count = 5, bool resolve = false)
     {
         var resolveSuffix = resolve ? "&resolve=local&resolvedepth=2" : "";
+        // srsName, like the importer sends it: without it a server answers in its own default,
+        // which for Saarland is EPSG:4258 — degrees, and in latitude/longitude order.
         var url = $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature" +
                   $"&typenames={Uri.EscapeDataString(typeName)}" +
                   $"&bbox={bbox},{Uri.EscapeDataString(crs)}" +
+                  $"&srsName={Uri.EscapeDataString(crs)}" +
                   $"&count={count}&startIndex=0{resolveSuffix}";
 
         var response = await Http.GetAsync(url);
