@@ -63,10 +63,19 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
             .OrderBy(p => p)
             .ToListAsync();
 
-    public async Task<ImportLog?> GetLastImportAsync() =>
-        await VisibleCompletedImports
-            .OrderByDescending(l => l.ImportedAt)
-            .FirstOrDefaultAsync();
+    /// <summary>
+    /// Unix ms up to which all visible data is confirmed current: each source's latest successful
+    /// check (an import, or a later run that found nothing newer), and of those the oldest — a
+    /// source whose checks keep failing holds the date back. Null before the first import.
+    /// </summary>
+    public async Task<long?> GetLastCheckedAtAsync()
+    {
+        var checks = await VisibleCompletedImports
+            .GroupBy(l => l.Source)
+            .Select(g => g.Max(l => l.LastCheckedAt ?? l.CompletedAt))
+            .ToListAsync();
+        return checks.Count == 0 ? null : checks.Min();
+    }
 
     /// <summary>
     /// Every import replaces its source's rows, so the latest completed import per source holds

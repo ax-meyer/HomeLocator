@@ -150,7 +150,7 @@ public partial class PropertyBulkWriter(
         // In the same transaction, so swapped data is never logged as a failed import (which
         // would re-import it the next night) and a logged completion always has its data.
         await using (var complete = new NpgsqlCommand("""
-            UPDATE "ImportLogs" SET "RecordCount" = $2, "CompletedAt" = $3, "LastError" = NULL WHERE "Id" = $1
+            UPDATE "ImportLogs" SET "RecordCount" = $2, "CompletedAt" = $3, "LastCheckedAt" = $3, "LastError" = NULL WHERE "Id" = $1
             """, conn, tx))
         {
             complete.Parameters.AddWithValue(importLogId);
