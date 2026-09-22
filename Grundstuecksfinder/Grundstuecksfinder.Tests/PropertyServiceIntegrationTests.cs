@@ -67,38 +67,47 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     }
 
     [Fact]
-    public async Task GetLastImportAsync_NoLogs_ReturnsNull()
+    public async Task GetLastCheckedAtAsync_NoLogs_ReturnsNull()
     {
         await using var context = fixture.CreateContext();
         var service = new PropertyService(context, DisabledSources.None);
 
-        var result = await service.GetLastImportAsync();
+        var result = await service.GetLastCheckedAtAsync();
 
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task GetLastImportAsync_MultipleImports_ReturnsMostRecent()
+    public async Task GetLastCheckedAtAsync_UsesLatestCheckPerSourceAndOldestAcrossSources()
     {
-        var older = DateTimeOffset.UtcNow.AddDays(-2).ToUnixTimeMilliseconds();
-        var newer = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
-
         await using var context = fixture.CreateContext();
         context.ImportLogs.AddRange(
-            new ImportLog { DatasetName = "ds1", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = older, RecordCount = 10, CompletedAt = older },
-            new ImportLog { DatasetName = "ds1", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = newer, RecordCount = 20, CompletedAt = newer },
-            // Newest, but still running (or failed): not the "last import" shown to users.
-            new ImportLog { DatasetName = "ds1", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = newer + 1, RecordCount = 0 }
-        );
+            // nrw: imported long ago, confirmed current by a recent check.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 100, RecordCount = 10, CompletedAt = 100, LastCheckedAt = 900 },
+            // Still running (or failed): never counts.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = 950, RecordCount = 0 },
+            // sh: last confirmed earlier, so it holds the date back.
+            new ImportLog { Source = "sh", DatasetName = "ds", FileName = "sh", FileTimestamp = "ts1", ImportedAt = 500, RecordCount = 5, CompletedAt = 600, LastCheckedAt = 700 });
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, DisabledSources.None);
 
-        var result = await service.GetLastImportAsync();
+        (await service.GetLastCheckedAtAsync()).Should().Be(700);
+    }
 
-        result.Should().NotBeNull();
-        result!.RecordCount.Should().Be(20);
+    [Fact]
+    public async Task GetLastCheckedAtAsync_NeverChecked_FallsBackToCompletion()
+    {
+        await using var context = fixture.CreateContext();
+        context.ImportLogs.Add(
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 100, RecordCount = 10, CompletedAt = 400 });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, DisabledSources.None);
+
+        (await service.GetLastCheckedAtAsync()).Should().Be(400);
     }
 
     [Fact]
@@ -126,11 +135,11 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
         (await service.GetDistinctPlzAsync()).Should().Equal("50667");
         (await service.GetTotalPropertyCountAsync()).Should().Be(1);
-        (await service.GetLastImportAsync())!.Source.Should().Be("nrw");
+        (await service.GetLastCheckedAtAsync()).Should().Be(1, "only the visible nrw import counts");
     }
 
     [Fact]
-    public async Task DisabledSource_WithOnlyItsImportCompleted_HasNoLastImport()
+    public async Task DisabledSource_WithOnlyItsImportCompleted_HasNoLastCheck()
     {
         await using var context = fixture.CreateContext();
         context.ImportLogs.AddRange(
@@ -141,7 +150,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, new DisabledSources(["he"]));
 
-        (await service.GetLastImportAsync()).Should().BeNull("the only non-empty import belongs to the disabled source");
+        (await service.GetLastCheckedAtAsync()).Should().BeNull("the only non-empty import belongs to the disabled source");
         (await service.GetTotalPropertyCountAsync()).Should().Be(0);
     }
 

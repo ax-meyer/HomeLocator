@@ -54,6 +54,10 @@ public partial class ImportOrchestrator(
             if (existing?.CompletedAt is not null)
             {
                 LogAlreadyImported(logger, importer.Source, candidate.DatasetName, candidate.FileName);
+                // The data is still current as of now; shown to users instead of the (possibly
+                // old) import date, so unchanged data doesn't look stale.
+                existing.LastCheckedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                await context.SaveChangesAsync(ct);
                 continue;
             }
 

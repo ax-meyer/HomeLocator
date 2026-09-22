@@ -54,6 +54,7 @@ public sealed class PropertyBulkWriterTests(PostgresFixture fixture) : IAsyncLif
         rows.Should().Be(10);
         log.RecordCount.Should().Be(10);
         log.CompletedAt.Should().NotBeNull("completion is recorded in the swap transaction");
+        log.LastCheckedAt.Should().Be(log.CompletedAt, "freshly imported data is current as of its completion");
     }
 
     [Fact]

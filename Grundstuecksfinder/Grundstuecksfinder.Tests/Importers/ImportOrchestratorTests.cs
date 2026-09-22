@@ -68,6 +68,25 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
     }
 
     [Fact]
+    public async Task CheckAndImportAsync_NothingNewer_RecordsTheCheckWithoutReimporting()
+    {
+        var importer = new StubPropertyImporter("a", "ds", "file-a", "2026-01-01", [MakeProperty("a")]);
+        await BuildOrchestrator(importer).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        ImportLog imported;
+        await using (var context = fixture.CreateContext())
+            imported = await context.ImportLogs.SingleAsync(TestContext.Current.CancellationToken);
+
+        var beforeCheck = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await BuildOrchestrator(importer).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await using var after = fixture.CreateContext();
+        var log = await after.ImportLogs.SingleAsync(TestContext.Current.CancellationToken);
+        log.CompletedAt.Should().Be(imported.CompletedAt, "the unchanged version isn't imported again");
+        log.LastCheckedAt.Should().BeGreaterThanOrEqualTo(beforeCheck);
+    }
+
+    [Fact]
     public async Task CheckAndImportAsync_SameDatasetNamingAcrossSources_DedupIsScopedBySource()
     {
         // Two unrelated sources coincidentally reuse identical dataset/file/timestamp naming.

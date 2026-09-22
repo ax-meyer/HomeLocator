@@ -16,6 +16,12 @@ public class ImportLog
     /// </summary>
     public long? CompletedAt { get; set; }
 
+    /// <summary>
+    /// Unix ms of the latest run that confirmed this version is still the current data: set when
+    /// the import completes and again by every later check that finds nothing newer.
+    /// </summary>
+    public long? LastCheckedAt { get; set; }
+
     /// <summary>Why the latest attempt of this version failed; null while running or once completed.</summary>
     public string? LastError { get; set; }
 }
