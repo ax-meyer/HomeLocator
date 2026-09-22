@@ -6,6 +6,10 @@ using System.Xml.Linq;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers.Postcodes;
 using NetTopologySuite.Geometries;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
+using Polly.Timeout;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
@@ -37,7 +41,8 @@ public partial class InspirePropertyImporter(
     IHttpClientFactory httpClientFactory,
     InspireSourceOptions options,
     TimeProvider? timeProvider = null,
-    IPostcodeAreaProvider? postcodeAreas = null) : IPropertyImporter
+    IPostcodeAreaProvider? postcodeAreas = null,
+    ILoggerFactory? loggerFactory = null) : IPropertyImporter
 {
     /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
     public const string HttpClientName = "Inspire";
@@ -47,6 +52,12 @@ public partial class InspirePropertyImporter(
     private const int ProgressLogInterval = 250;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    /// <summary>
+    /// Retry → circuit breaker → per-attempt timeout, one pipeline per source so a server that is
+    /// down only trips its own state. Built lazily because it needs <see cref="_time"/>.
+    /// </summary>
+    private ResiliencePipeline? _pipeline;
 
     public string Source => options.Source;
 
@@ -370,34 +381,86 @@ public partial class InspirePropertyImporter(
     private async Task<T> WithRetryAsync<T>(
         Func<CancellationToken, Task<T>> action, string what, string where, CancellationToken ct)
     {
-        for (var attempt = 1; ; attempt++)
+        var context = ResilienceContextPool.Shared.Get(ct);
+        context.Properties.Set(WhatKey, what);
+        context.Properties.Set(WhereKey, where);
+        try
         {
-            // HttpClient.Timeout ends once the headers arrive; this also bounds reading and
-            // parsing the body, so a server stalling mid-response can't hang the import.
-            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attemptCts.CancelAfter(TimeSpan.FromSeconds(options.RequestTimeoutSeconds));
-            try
-            {
-                return await action(attemptCts.Token);
-            }
-            catch (Exception ex) when (attempt < options.MaxAttempts && !ct.IsCancellationRequested && IsTransient(ex))
-            {
-                var delay = RetryDelay(attempt, (ex as WfsHttpException)?.RetryAfter);
-                LogRetrying(logger, ex, Source, what, where, attempt, options.MaxAttempts, delay);
-                await Task.Delay(delay, _time, ct);
-            }
+            return await (_pipeline ??= BuildPipeline()).ExecuteAsync(
+                static async (ctx, state) => await state(ctx.CancellationToken), context, action);
+        }
+        finally
+        {
+            ResilienceContextPool.Shared.Return(context);
         }
     }
 
+    private static readonly ResiliencePropertyKey<string> WhatKey = new("what");
+    private static readonly ResiliencePropertyKey<string> WhereKey = new("where");
+
     /// <summary>
-    /// Exponential backoff with ±20% jitter, at least the server's Retry-After, at most
-    /// <see cref="InspireSourceOptions.MaxRetryDelaySeconds"/>.
+    /// Exponential backoff with jitter, never below a server's Retry-After and never above
+    /// <see cref="InspireSourceOptions.MaxRetryDelaySeconds"/>; then a circuit breaker so a server
+    /// that is down fails the import in seconds instead of retrying every one of thousands of
+    /// tiles; innermost a per-attempt timeout that also bounds reading and parsing the body,
+    /// which HttpClient.Timeout stops covering once the headers have arrived.
     /// </summary>
-    private TimeSpan RetryDelay(int attempt, TimeSpan? retryAfter)
+    private ResiliencePipeline BuildPipeline()
     {
-        var backoff = options.RetryBaseDelaySeconds * Math.Pow(2, attempt - 1) * (0.8 + 0.4 * Random.Shared.NextDouble());
-        var seconds = Math.Max(backoff, retryAfter?.TotalSeconds ?? 0);
-        return TimeSpan.FromSeconds(Math.Min(seconds, options.MaxRetryDelaySeconds));
+        var builder = new ResiliencePipelineBuilder { TimeProvider = _time, Name = $"inspire:{Source}" };
+        // Polly's own logs and metrics (meter "Polly", tagged with the pipeline name), next to
+        // the app's meter in AppMetrics. Left off when no factory is available, e.g. in tests.
+        if (loggerFactory is not null)
+            builder.ConfigureTelemetry(loggerFactory);
+        return builder
+            .AddRetry(new RetryStrategyOptions
+            {
+                ShouldHandle = args => ValueTask.FromResult(IsTransient(args.Outcome.Exception)),
+                MaxRetryAttempts = options.MaxAttempts - 1,
+                BackoffType = DelayBackoffType.Exponential,
+                UseJitter = true,
+                Delay = TimeSpan.FromSeconds(options.RetryBaseDelaySeconds),
+                MaxDelay = TimeSpan.FromSeconds(options.MaxRetryDelaySeconds),
+                DelayGenerator = args =>
+                {
+                    // Polly's own delay is in args.Context; a server's Retry-After wins when longer.
+                    var retryAfter = (args.Outcome.Exception as WfsHttpException)?.RetryAfter;
+                    return ValueTask.FromResult(retryAfter is { } wait
+                        ? TimeSpan.FromSeconds(Math.Min(wait.TotalSeconds, options.MaxRetryDelaySeconds))
+                        : (TimeSpan?)null);
+                },
+                OnRetry = args =>
+                {
+                    LogRetrying(logger, args.Outcome.Exception!, Source,
+                        args.Context.Properties.GetValue(WhatKey, "request"),
+                        args.Context.Properties.GetValue(WhereKey, ""),
+                        args.AttemptNumber + 1, options.MaxAttempts, args.RetryDelay);
+                    return default;
+                },
+            })
+            .AddCircuitBreaker(new CircuitBreakerStrategyOptions
+            {
+                ShouldHandle = args => ValueTask.FromResult(IsTransient(args.Outcome.Exception)),
+                FailureRatio = options.CircuitFailureRatio,
+                MinimumThroughput = options.CircuitMinimumThroughput,
+                SamplingDuration = TimeSpan.FromSeconds(options.CircuitSamplingSeconds),
+                BreakDuration = TimeSpan.FromSeconds(options.CircuitBreakSeconds),
+                OnOpened = args =>
+                {
+                    LogCircuitOpened(logger, args.Outcome.Exception!, Source, args.BreakDuration);
+                    return default;
+                },
+                OnClosed = args =>
+                {
+                    LogCircuitClosed(logger, Source);
+                    return default;
+                },
+            })
+            .AddTimeout(new TimeoutStrategyOptions
+            {
+                Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds),
+            })
+            .Build();
     }
 
     /// <summary>
@@ -405,11 +468,14 @@ public partial class InspirePropertyImporter(
     /// truncated, garbled or error-document bodies, 5xx, 408 and 429 are worth retrying; other
     /// 4xx mean the request itself is wrong. Only GETs are ever retried.
     /// </summary>
-    private static bool IsTransient(Exception ex) => ex switch
+    private static bool IsTransient(Exception? ex) => ex switch
     {
+        // The breaker's own rejection is not a server failure, and a retry would only re-reject.
+        BrokenCircuitException => false,
         WfsHttpException { StatusCode: var status } =>
             (int)status! >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests,
         HttpRequestException or OperationCanceledException or IOException or XmlException or WfsResponseException => true,
+        TimeoutRejectedException => true,
         _ => false,
     };
 
@@ -445,6 +511,12 @@ public partial class InspirePropertyImporter(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: {What} for {Where} failed (attempt {Attempt} of {MaxAttempts}), retrying in {Delay}")]
     private static partial void LogRetrying(ILogger logger, Exception exception, string source, string what, string where, int attempt, int maxAttempts, TimeSpan delay);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Source}: too many requests failed; pausing all requests for {BreakDuration}")]
+    private static partial void LogCircuitOpened(ILogger logger, Exception exception, string source, TimeSpan breakDuration);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: requests are getting through again")]
+    private static partial void LogCircuitClosed(ILogger logger, string source);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't read the page-size limit from {Url}'s capabilities; using the configured PageSize")]
     private static partial void LogCapabilitiesFailed(ILogger logger, Exception exception, string source, string url);

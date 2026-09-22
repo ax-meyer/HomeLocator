@@ -17,6 +17,7 @@
         <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.12" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.12" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
         <PackageReference Include="Testcontainers.PostgreSql" Version="4.15.0" />
         <!-- The "mtp-v2" variant pins Microsoft.Testing.Platform v2; the plain
              xunit.v3 metapackage would pull MTP v1 instead. -->

@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Xml.Linq;
 using FakeItEasy;
@@ -7,8 +8,11 @@ using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NetTopologySuite.Geometries;
+using Polly.CircuitBreaker;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -44,11 +48,31 @@ public sealed class InspirePropertyImporterTests
     }
 
     private static InspirePropertyImporter Importer(
-        FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null, IPostcodeAreaProvider? postcodeAreas = null)
+        FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null,
+        IPostcodeAreaProvider? postcodeAreas = null, ILoggerFactory? loggerFactory = null)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
-        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas);
+        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas, loggerFactory);
+    }
+
+    /// <summary>
+    /// Runs an operation that waits on the pipeline's clock and advances that clock until it
+    /// finishes, so retry and timeout waits cost no real time. Returns how far the clock moved.
+    /// </summary>
+    private static async Task<(T Result, TimeSpan Advanced)> WithVirtualTimeAsync<T>(
+        FakeTimeProvider time, Task<T> task, TimeSpan step, TimeSpan limit)
+    {
+        var advanced = TimeSpan.Zero;
+        while (!task.IsCompleted && advanced < limit)
+        {
+            await Task.Delay(1, TestContext.Current.CancellationToken);
+            time.Advance(step);
+            advanced += step;
+        }
+        if (!task.IsCompleted)
+            throw new TimeoutException($"still waiting after advancing the clock by {advanced}");
+        return (await task, advanced);
     }
 
     /// <summary>Postcode areas as vertical strips: "1xxxx" for x &lt; 50, "2xxxx" for 50 ≤ x &lt; 90, none beyond.</summary>
@@ -190,6 +214,56 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
+    public async Task FetchAsync_ServerFailsHalfTheRequests_OpensTheCircuitInsteadOfGrindingOn()
+    {
+        // A degraded server answers often enough that every tile eventually succeeds on retry, so
+        // without a breaker the import would crawl through all 100 tiles at MaxAttempts each.
+        var server = GridServer(2);
+        var requests = 0;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!uri.Query.Contains("bbox=")) return null;
+            requests++;
+            return requests % 2 == 0 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : null;
+        };
+
+        var options = Options(o =>
+        {
+            o.TileSizeMeters = 10;          // 100 tiles
+            o.CircuitMinimumThroughput = 4;
+            o.CircuitFailureRatio = 0.4;
+        });
+
+        var act = () => FetchAllAsync(Importer(server, options));
+
+        await act.Should().ThrowAsync<BrokenCircuitException>();
+        requests.Should().BeLessThan(40, "the circuit opens long before all 100 tiles have been tried");
+    }
+
+    [Fact]
+    public async Task FetchAsync_WithLoggerFactory_ReportsRetriesAsPollyTelemetry()
+    {
+        var server = GridServer(2);
+        var failed = false;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!IsAddressGetFeature(uri) || failed) return null;
+            failed = true;
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        };
+
+        using var meterReader = new MeterReader("Polly");
+
+        var rows = await FetchAllAsync(Importer(server, Options(), loggerFactory: NullLoggerFactory.Instance));
+
+        rows.Should().HaveCount(4);
+        meterReader.Instruments.Should().Contain("resilience.polly.strategy.attempt.duration",
+            "the pipeline is wired to Polly's meter, so retries show up next to the app's own metrics");
+        meterReader.Tags.Should().Contain(t => t.Key == "pipeline.name" && (string?)t.Value == "inspire:test",
+            "the measurements name the source whose server failed");
+    }
+
+    [Fact]
     public async Task FetchAsync_ClientError_IsNotRetried()
     {
         var server = GridServer(2);
@@ -296,10 +370,17 @@ public sealed class InspirePropertyImporterTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) };
         };
 
-        var rows = await FetchAllAsync(Importer(server, Options(o => o.RequestTimeoutSeconds = 0.5)));
+        var time = new FakeTimeProvider();
+        var options = Options(o => o.RequestTimeoutSeconds = 60);
+
+        var (rows, advanced) = await WithVirtualTimeAsync(
+            time, FetchAllAsync(Importer(server, options, time)),
+            step: TimeSpan.FromSeconds(5), limit: TimeSpan.FromSeconds(300));
 
         stalled.Should().BeTrue();
         rows.Should().HaveCount(4);
+        advanced.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(60),
+            "the stalled attempt runs until RequestTimeoutSeconds is up");
     }
 
     [Fact]
@@ -313,12 +394,19 @@ public sealed class InspirePropertyImporterTests
             throttled = true;
             var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
             response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
-            return response; // MaxRetryDelaySeconds = 0 in these tests caps the wait
+            return response;
         };
 
-        var rows = await FetchAllAsync(Importer(server, Options()));
+        var time = new FakeTimeProvider();
+        var options = Options(o => { o.RetryBaseDelaySeconds = 1; o.MaxRetryDelaySeconds = 5; });
+
+        var (rows, advanced) = await WithVirtualTimeAsync(
+            time, FetchAllAsync(Importer(server, options, time)),
+            step: TimeSpan.FromSeconds(1), limit: TimeSpan.FromSeconds(29));
 
         rows.Should().HaveCount(4);
+        advanced.Should().BeLessThan(TimeSpan.FromSeconds(10),
+            "MaxRetryDelaySeconds caps the wait at 5 s, so the server's Retry-After of 30 s is not obeyed literally");
     }
 
     [Fact]
@@ -362,7 +450,7 @@ public sealed class InspirePropertyImporterTests
     public async Task DiscoverAsync_VersionCombinesCountsAndMonth()
     {
         var server = GridServer(2);
-        var time = new FixedTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
 
         var candidates = await Importer(server, Options(), time).DiscoverAsync(TestContext.Current.CancellationToken);
 
@@ -513,8 +601,30 @@ public sealed class InspirePropertyImporterTests
             ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    /// <summary>Records which instruments of a meter were written to, and with what tags.</summary>
+    private sealed class MeterReader : IDisposable
     {
-        public override DateTimeOffset GetUtcNow() => now;
+        private readonly MeterListener _listener = new();
+        public List<string> Instruments { get; } = [];
+        public List<KeyValuePair<string, object?>> Tags { get; } = [];
+
+        public MeterReader(string meterName)
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == meterName) listener.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+            {
+                lock (Instruments)
+                {
+                    Instruments.Add(instrument.Name);
+                    Tags.AddRange(tags.ToArray());
+                }
+            });
+            _listener.Start();
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }

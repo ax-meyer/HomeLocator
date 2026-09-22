@@ -20,6 +20,7 @@
              both an MSB3277 conflict warning and a runtime
              FileNotFoundException. -->
         <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.10.0" />
         <PackageReference Include="NetTopologySuite.IO.GeoJSON" Version="4.0.0" />
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
         <!-- In-memory point-in-polygon spatial join for INSPIRE importers only; Property

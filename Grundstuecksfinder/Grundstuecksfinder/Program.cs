@@ -72,7 +72,8 @@ foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
         sp.GetRequiredService<ILogger<InspirePropertyImporter>>(),
         sp.GetRequiredService<IHttpClientFactory>(),
         inspireSource,
-        postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>()));
+        postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>(),
+        loggerFactory: sp.GetRequiredService<ILoggerFactory>()));
 }
 
 var minRetainedRatio = builder.Configuration.GetValue("Import:MinRetainedRatio", PropertyBulkWriter.DefaultMinRetainedRatio);
