@@ -112,6 +112,30 @@ public class WfsGmlParserTests
     }
 
     [Fact]
+    public void ParseAddresses_WithoutOrtsteil_UsesPostNameAsOrtByDefault()
+    {
+        using var stream = OpenFixture("addresses_shared_postname.gml");
+
+        var address = WfsGmlParser.ParseAddresses(stream).Features.Single();
+
+        address.Ort.Should().Be("Petersdorf a. F.");
+        address.Gemeinde.Should().Be("Fehmarn");
+    }
+
+    [Fact]
+    public void ParseAddresses_PostNameDisabled_FallsBackToGemeinde()
+    {
+        using var stream = OpenFixture("addresses_shared_postname.gml");
+
+        var address = WfsGmlParser.ParseAddresses(stream, usePostName: false).Features.Single();
+
+        address.Ort.Should().Be("Fehmarn", "SH's postName is one arbitrary village per postcode");
+        address.Gemeinde.Should().Be("Fehmarn");
+        address.Plz.Should().Be("23769", "the postcode is still taken from the PostalDescriptor");
+        address.Str.Should().Be("Breite Straße");
+    }
+
+    [Fact]
     public void ParseAddresses_HessenStyle_ResolvesGemeindeAndRepairsCorruptedStrasse()
     {
         using var stream = OpenFixture("addresses_levels.gml");

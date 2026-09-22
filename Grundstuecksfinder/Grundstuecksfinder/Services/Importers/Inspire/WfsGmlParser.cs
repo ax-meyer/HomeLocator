@@ -47,10 +47,15 @@ public static class WfsGmlParser
         return new WfsPage<ParcelFeature>(parcels, members.Count, SrsNames(doc));
     }
 
-    public static WfsPage<AddressFeature> ParseAddresses(Stream gml, bool isCityState = false) =>
-        ParseAddresses(XDocument.Load(gml), isCityState);
+    public static WfsPage<AddressFeature> ParseAddresses(Stream gml, bool isCityState = false, bool usePostName = true) =>
+        ParseAddresses(XDocument.Load(gml), isCityState, usePostName);
 
-    public static WfsPage<AddressFeature> ParseAddresses(XDocument doc, bool isCityState = false)
+    /// <summary>
+    /// With <c>usePostName</c> false, the PostalDescriptor's postName is ignored as an Ort
+    /// candidate, for sources whose postName is one arbitrary place per postcode rather than
+    /// the address's own town.
+    /// </summary>
+    public static WfsPage<AddressFeature> ParseAddresses(XDocument doc, bool isCityState = false, bool usePostName = true)
     {
         var componentsById = new Dictionary<string, XElement>();
         foreach (var member in doc.Root!
@@ -72,7 +77,7 @@ public static class WfsGmlParser
             if (point is null) continue; // nothing to join without a location
 
             var (hnr, hnrZus) = ParseDesignators(address);
-            var (str, plz, ort, gemeinde) = ResolveComponents(address, componentsById, isCityState);
+            var (str, plz, ort, gemeinde) = ResolveComponents(address, componentsById, isCityState, usePostName);
 
             addresses.Add(new AddressFeature(point, str, hnr, hnrZus, plz, ort, gemeinde));
         }
@@ -109,7 +114,7 @@ public static class WfsGmlParser
     }
 
     private static (string? Str, string? Plz, string? Ort, string? Gemeinde) ResolveComponents(
-        XElement address, Dictionary<string, XElement> componentsById, bool isCityState)
+        XElement address, Dictionary<string, XElement> componentsById, bool isCityState, bool usePostName)
     {
         string? str = null;
         string? plz = null;
@@ -132,7 +137,7 @@ public static class WfsGmlParser
                     break;
                 case "PostalDescriptor":
                     plz ??= component.Elements().FirstOrDefault(e => e.Name.LocalName == "postCode")?.Value;
-                    postName ??= FirstText(component);
+                    if (usePostName) postName ??= FirstText(component);
                     break;
                 case "AdminUnitName":
                     var name = FirstText(component);
