@@ -1,5 +1,6 @@
 @page "/"
 @inject PropertyService PropertyService
+@inject FilterOptionsService FilterOptionsService
 @inject GeocodingService GeocodingService
 @inject AppMetrics AppMetrics
 @using Grundstuecksfinder.Services
@@ -31,14 +32,14 @@ else
     <div class="col-sm-6 col-md-3">
         <RadzenLabel Text="PLZ" />
         <RadzenDropDown @bind-Value="_plz" Data="@_plzOptions"
-                        AllowFiltering="true" AllowClear="true"
+                        AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
                         Placeholder="PLZ wählen …" class="w-100" />
     </div>
     <div class="col-sm-6 col-md-3">
         <RadzenLabel Text="Gemeinde" />
         <RadzenDropDown @bind-Value="_gemeinde" Data="@_gemeindeOptions"
-                        AllowFiltering="true" AllowClear="true"
+                        AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
                         Placeholder="Gemeinde wählen …" class="w-100" />
     </div>
@@ -111,8 +112,8 @@ else
     private long _totalCount;
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
 
-    private List<string> _plzOptions = [];
-    private List<string> _gemeindeOptions = [];
+    private IReadOnlyList<string> _plzOptions = [];
+    private IReadOnlyList<string> _gemeindeOptions = [];
 
     // propertyId → (lat, lon)
     private readonly Dictionary<int, (double Lat, double Lon)> _coords = [];
@@ -121,8 +122,9 @@ else
     {
         _lastCheckedAt = await PropertyService.GetLastCheckedAtAsync();
         _totalCount = await PropertyService.GetTotalPropertyCountAsync();
-        _plzOptions = await PropertyService.GetDistinctPlzAsync();
-        _gemeindeOptions = await PropertyService.GetDistinctGemeindenAsync();
+        var filterOptions = await FilterOptionsService.GetAsync();
+        _plzOptions = filterOptions.Plz;
+        _gemeindeOptions = filterOptions.Gemeinden;
     }
 
     protected override Task OnAfterRenderAsync(bool firstRender)
