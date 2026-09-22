@@ -8,6 +8,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__DefaultConnection: "Host=db;Database=homelocator;Username=homelocator;Password=${DB_PASSWORD}"
+      Geocoding__NominatimBaseUrl: "http://nominatim:8080/"
+      Geocoding__RepairCorruptedStreets: "true"
     volumes:
       - dataprotection_keys:/root/.aspnet/DataProtection-Keys
     depends_on:
@@ -51,7 +53,7 @@ services:
 
   # Self-hosted geocoder (Germany only). The first start downloads the Geofabrik extract
   # (~4.5 GB) and imports it, which takes several hours. Afterwards it applies daily OSM
-  # diffs on its own. The app still uses the public Nominatim until it's switched over.
+  # diffs on its own.
   nominatim:
     image: mediagis/nominatim:5.3
     restart: unless-stopped
