@@ -8,6 +8,7 @@ using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NetTopologySuite.Geometries;
 using Polly.CircuitBreaker;
 using Xunit;
@@ -50,6 +51,25 @@ public sealed class InspirePropertyImporterTests
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
         return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas);
+    }
+
+    /// <summary>
+    /// Runs an operation that waits on the pipeline's clock and advances that clock until it
+    /// finishes, so retry and timeout waits cost no real time. Returns how far the clock moved.
+    /// </summary>
+    private static async Task<(T Result, TimeSpan Advanced)> WithVirtualTimeAsync<T>(
+        FakeTimeProvider time, Task<T> task, TimeSpan step, TimeSpan limit)
+    {
+        var advanced = TimeSpan.Zero;
+        while (!task.IsCompleted && advanced < limit)
+        {
+            await Task.Delay(1, TestContext.Current.CancellationToken);
+            time.Advance(step);
+            advanced += step;
+        }
+        if (!task.IsCompleted)
+            throw new TimeoutException($"still waiting after advancing the clock by {advanced}");
+        return (await task, advanced);
     }
 
     /// <summary>Postcode areas as vertical strips: "1xxxx" for x &lt; 50, "2xxxx" for 50 ≤ x &lt; 90, none beyond.</summary>
@@ -324,10 +344,17 @@ public sealed class InspirePropertyImporterTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) };
         };
 
-        var rows = await FetchAllAsync(Importer(server, Options(o => o.RequestTimeoutSeconds = 0.5)));
+        var time = new FakeTimeProvider();
+        var options = Options(o => o.RequestTimeoutSeconds = 60);
+
+        var (rows, advanced) = await WithVirtualTimeAsync(
+            time, FetchAllAsync(Importer(server, options, time)),
+            step: TimeSpan.FromSeconds(5), limit: TimeSpan.FromSeconds(300));
 
         stalled.Should().BeTrue();
         rows.Should().HaveCount(4);
+        advanced.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(60),
+            "the stalled attempt runs until RequestTimeoutSeconds is up");
     }
 
     [Fact]
@@ -341,12 +368,19 @@ public sealed class InspirePropertyImporterTests
             throttled = true;
             var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
             response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
-            return response; // MaxRetryDelaySeconds = 0 in these tests caps the wait
+            return response;
         };
 
-        var rows = await FetchAllAsync(Importer(server, Options()));
+        var time = new FakeTimeProvider();
+        var options = Options(o => { o.RetryBaseDelaySeconds = 1; o.MaxRetryDelaySeconds = 5; });
+
+        var (rows, advanced) = await WithVirtualTimeAsync(
+            time, FetchAllAsync(Importer(server, options, time)),
+            step: TimeSpan.FromSeconds(1), limit: TimeSpan.FromSeconds(29));
 
         rows.Should().HaveCount(4);
+        advanced.Should().BeLessThan(TimeSpan.FromSeconds(10),
+            "MaxRetryDelaySeconds caps the wait at 5 s, so the server's Retry-After of 30 s is not obeyed literally");
     }
 
     [Fact]
@@ -390,7 +424,7 @@ public sealed class InspirePropertyImporterTests
     public async Task DiscoverAsync_VersionCombinesCountsAndMonth()
     {
         var server = GridServer(2);
-        var time = new FixedTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
 
         var candidates = await Importer(server, Options(), time).DiscoverAsync(TestContext.Current.CancellationToken);
 
@@ -539,10 +573,5 @@ public sealed class InspirePropertyImporterTests
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
             ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
-    }
-
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
     }
 }
