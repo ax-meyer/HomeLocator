@@ -464,19 +464,14 @@ public partial class InspirePropertyImporter(
     }
 
     /// <summary>
-    /// Network errors, timeouts (an OperationCanceledException the caller didn't ask for),
-    /// truncated, garbled or error-document bodies, 5xx, 408 and 429 are worth retrying; other
-    /// 4xx mean the request itself is wrong. Only GETs are ever retried.
+    /// <see cref="TransientErrors"/> plus what only a WFS response can go wrong with: a body that
+    /// is truncated, garbled or an error document instead of a FeatureCollection.
     /// </summary>
     private static bool IsTransient(Exception? ex) => ex switch
     {
-        // The breaker's own rejection is not a server failure, and a retry would only re-reject.
-        BrokenCircuitException => false,
-        WfsHttpException { StatusCode: var status } =>
-            (int)status! >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests,
-        HttpRequestException or OperationCanceledException or IOException or XmlException or WfsResponseException => true,
-        TimeoutRejectedException => true,
-        _ => false,
+        WfsHttpException { StatusCode: { } status } => TransientErrors.IsTransientStatus(status),
+        XmlException or WfsResponseException => true,
+        _ => TransientErrors.IsTransient(ex),
     };
 
     /// <summary>A fetch tile; bounds in the source's CRS.</summary>

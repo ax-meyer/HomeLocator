@@ -61,6 +61,9 @@ builder.Services.AddSingleton(SupportedStates.FromSources(
 // instead: HttpClient.Timeout stops counting once the headers arrive.
 builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
     client.Timeout = Timeout.InfiniteTimeSpan);
+// Same for NRW's ~1 GB ZIP: bounded by NrwImporterOptions.DownloadTimeoutSeconds per attempt.
+builder.Services.AddHttpClient(NrwPropertyImporter.HttpClientName, client =>
+    client.Timeout = Timeout.InfiniteTimeSpan);
 // Postcode areas for sources without PLZ; the download is bounded by DownloadTimeoutSeconds.
 builder.Services.AddSingleton(builder.Configuration.GetSection("Import:PostcodeAreas").Get<PostcodeAreaOptions>() ?? new PostcodeAreaOptions());
 builder.Services.AddHttpClient(PostcodeAreaProvider.HttpClientName, client =>
