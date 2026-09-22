@@ -48,15 +48,9 @@ builder.Services.AddRazorComponents()
 
 builder.Services.AddMemoryCache();
 
-// Named client for Nominatim – required User-Agent per usage policy.
-builder.Services.AddHttpClient("Nominatim", client =>
-{
-    client.BaseAddress = new Uri("https://nominatim.openstreetmap.org/");
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("Grundstuecksfinder/1.0 (grundstuecksfinder-impressum@meyerweb.eu)");
-});
+builder.Services.AddNominatim(builder.Configuration);
 
 builder.Services.AddScoped<PropertyService>();
-builder.Services.AddScoped<GeocodingService>();
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks()
