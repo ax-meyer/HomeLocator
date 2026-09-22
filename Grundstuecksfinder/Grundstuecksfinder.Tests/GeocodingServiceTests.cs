@@ -44,6 +44,7 @@ public sealed class GeocodingServiceTests : IDisposable
         result.Should().NotBeNull();
         result!.Value.Lat.Should().BeApproximately(50.938361, 0.0001);
         result.Value.Lon.Should().BeApproximately(6.959974, 0.0001);
+        _handler.RequestedUris.Should().ContainSingle("a hit needs no retry");
     }
 
     [Fact]
@@ -114,7 +115,7 @@ public sealed class GeocodingServiceTests : IDisposable
 
         await _service.GeocodeAsync(SampleProperty(ort: ort));
 
-        Uri.UnescapeDataString(_handler.RequestedUris.Single().Query)
+        Uri.UnescapeDataString(_handler.RequestedUris[0].Query)
             .Should().Contain($"city={expectedCity}&");
     }
 
@@ -128,7 +129,46 @@ public sealed class GeocodingServiceTests : IDisposable
 
         await _service.GeocodeAsync(SampleProperty(str: "Adam-Riese-Stra\uFFFDe", ort: "Frankfurt am Main"));
 
-        Uri.UnescapeDataString(_handler.RequestedUris.Single().Query)
+        Uri.UnescapeDataString(_handler.RequestedUris[0].Query)
             .Should().Contain("street=1 Adam-Riese-Straße&");
+    }
+
+    [Fact]
+    public async Task GeocodeAsync_NoHitWithCity_RetriesWithStreetAndPostcodeOnly()
+    {
+        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+        _handler.AddRoute(
+            new Uri("https://nominatim.openstreetmap.org/search?street=14%20Achter%20de%20H%C3%B6f&postalcode=23769&format=json&limit=1&countrycodes=de").ToString(),
+            () => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"lat":"54.4155466","lon":"11.2706687"}]""", Encoding.UTF8, "application/json")
+            });
+
+        var result = await _service.GeocodeAsync(
+            SampleProperty(str: "Achter de Höf", hnr: "14", plz: "23769", ort: "Petersdorf a. F."));
+
+        result.Should().NotBeNull();
+        result!.Value.Lat.Should().BeApproximately(54.4155466, 0.0001);
+        _handler.RequestedUris.Should().HaveCount(2);
+        Uri.UnescapeDataString(_handler.RequestedUris[0].Query).Should().Contain("city=Petersdorf a. F.&");
+        _handler.RequestedUris[1].Query.Should().NotContain("city=");
+    }
+
+    [Fact]
+    public async Task GeocodeAsync_NoHitWithoutPostcode_DoesNotRetryWithoutCity()
+    {
+        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+
+        var result = await _service.GeocodeAsync(new Property { Str = "Zeil", Hnr = "1", Ort = "Frankfurt am Main" });
+
+        result.Should().BeNull();
+        _handler.RequestedUris.Should().ContainSingle("street alone would match the same street anywhere in Germany");
     }
 }
