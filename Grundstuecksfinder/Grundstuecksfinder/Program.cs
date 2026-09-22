@@ -53,6 +53,9 @@ builder.Services.AddSingleton(new DisabledSources(
     inspireSources.Where(s => !s.Enabled).Select(s => s.Source)
         .Concat(nrwEnabled ? [] : [NrwPropertyImporter.SourceId])
         .ToList()));
+builder.Services.AddSingleton(SupportedStates.FromSources(
+    inspireSources.Where(s => s.Enabled).Select(s => s.Source)
+        .Concat(nrwEnabled ? [NrwPropertyImporter.SourceId] : [])));
 // Each request (headers, body and parsing) is bounded by the source's RequestTimeoutSeconds
 // instead: HttpClient.Timeout stops counting once the headers arrive.
 builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
