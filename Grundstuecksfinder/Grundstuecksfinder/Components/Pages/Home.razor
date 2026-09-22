@@ -36,14 +36,14 @@ else
 <div class="row g-3 mb-4 align-items-end">
     <div class="col-sm-6 col-md-3">
         <RadzenLabel Text="PLZ" />
-        <RadzenDropDown @bind-Value="_plz" Data="@_plzOptions"
+        <RadzenDropDown @bind-Value="_plz" @bind-Value:after="OnLocationChanged" Data="@_plzOptions"
                         AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
                         Placeholder="PLZ wählen …" class="w-100" />
     </div>
     <div class="col-sm-6 col-md-3">
         <RadzenLabel Text="Gemeinde" />
-        <RadzenDropDown @bind-Value="_gemeinde" Data="@_gemeindeOptions"
+        <RadzenDropDown @bind-Value="_gemeinde" @bind-Value:after="OnLocationChanged" Data="@_gemeindeOptions"
                         AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
                         Placeholder="Gemeinde wählen …" class="w-100" />
@@ -98,6 +98,10 @@ else
         </RadzenDataGrid>
     }
 }
+else if (_searchRequested)
+{
+    <p class="text-muted">Bitte wähle zuerst eine PLZ oder Gemeinde.</p>
+}
 else
 {
     <p class="text-muted">Wähle eine PLZ oder Gemeinde und klicke auf <strong>Suchen</strong>.</p>
@@ -113,6 +117,10 @@ else
     private List<Property> _properties = [];
     private bool _searched;
     private bool _loading;
+    // Suchen was clicked without a PLZ/Gemeinde; search as soon as one is chosen.
+    private bool _searchRequested;
+    // A filter changed while a search was running.
+    private bool _rerunSearch;
     private long? _lastCheckedAt;
     private long _totalCount;
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
@@ -145,12 +153,48 @@ else
             return;
 
         _lastSearchAt = DateTimeOffset.UtcNow;
+        await RunSearch();
+    }
+
+    // RadzenDropDown sets its value only after closing the popup (a JS round trip), so a
+    // click on Suchen right after picking an item can run before the value arrives. Re-running
+    // the search when the value lands keeps the results in line with the visible filters.
+    private Task OnLocationChanged() =>
+        _searched || _searchRequested ? RunSearch() : Task.CompletedTask;
+
+    private async Task RunSearch()
+    {
+        if (_loading)
+        {
+            _rerunSearch = true;
+            return;
+        }
+
         _loading = true;
-        _coords.Clear();
-        AppMetrics.RecordSearch();
-        _properties = await PropertyService.GetPropertiesAsync(_gemeinde, _plz, _minFlaeche, _maxFlaeche, MaxResults);
-        _searched = true;
-        _loading = false;
+        try
+        {
+            do
+            {
+                _rerunSearch = false;
+                if (string.IsNullOrEmpty(_plz) && string.IsNullOrEmpty(_gemeinde))
+                {
+                    _searchRequested = true;
+                    _searched = false;
+                    _properties = [];
+                    return;
+                }
+
+                _searchRequested = false;
+                _coords.Clear();
+                AppMetrics.RecordSearch();
+                _properties = await PropertyService.GetPropertiesAsync(_gemeinde, _plz, _minFlaeche, _maxFlaeche, MaxResults);
+                _searched = true;
+            } while (_rerunSearch);
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async Task OnRowExpand(Property property)
