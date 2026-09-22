@@ -68,6 +68,18 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
             .OrderByDescending(l => l.ImportedAt)
             .FirstOrDefaultAsync();
 
-    public async Task<long> GetTotalPropertyCountAsync() =>
-        await VisibleProperties.LongCountAsync();
+    /// <summary>
+    /// Every import replaces its source's rows, so the latest completed import per source holds
+    /// that source's row count. Read from the small ImportLogs table instead of counting millions
+    /// of Properties on every page load.
+    /// </summary>
+    public async Task<long> GetTotalPropertyCountAsync()
+    {
+        var imports = await VisibleCompletedImports
+            .Select(l => new { l.Source, l.CompletedAt, l.RecordCount })
+            .ToListAsync();
+        return imports
+            .GroupBy(l => l.Source)
+            .Sum(g => g.MaxBy(l => l.CompletedAt)!.RecordCount);
+    }
 }

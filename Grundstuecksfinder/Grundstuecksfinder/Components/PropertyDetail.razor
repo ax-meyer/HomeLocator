@@ -36,7 +36,7 @@
             }
 
             <button class="btn btn-sm btn-outline-primary" @onclick="CopyAddress">
-                @(_copied ? "✓ Kopiert" : "Adresse kopieren")
+                @(_copyStatus ?? "Adresse kopieren")
             </button>
         </div>
     </div>
@@ -85,15 +85,30 @@
             new[] { $"{Property.Str} {Property.Hnr}{Property.HnrZus}".Trim(), Property.Plz, Property.Ort }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
 
-    private bool _copied;
+    private string? _copyStatus;
 
     private async Task CopyAddress()
     {
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", DisplayAddress);
-        _copied = true;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", DisplayAddress);
+            _copyStatus = "✓ Kopiert";
+        }
+        // The Clipboard API only exists in secure contexts (HTTPS) and the browser may deny it;
+        // an unhandled exception here would tear down the whole Blazor circuit.
+        catch (JSException)
+        {
+            _copyStatus = "Kopieren nicht möglich";
+        }
+        // The user left the page mid-call: nothing left to update.
+        catch (JSDisconnectedException)
+        {
+            return;
+        }
+
         StateHasChanged();
         await Task.Delay(1500);
-        _copied = false;
+        _copyStatus = null;
         StateHasChanged();
     }
 

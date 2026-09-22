@@ -106,6 +106,9 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     {
         await using var context = fixture.CreateContext();
         var nrwLog = NewImportLog();
+        nrwLog.Source = "nrw";
+        nrwLog.RecordCount = 1;
+        nrwLog.CompletedAt = 1;
         var heLog = NewImportLog();
         heLog.Source = "he";
         heLog.FileName = "he.zip";
@@ -123,6 +126,41 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
         (await service.GetDistinctPlzAsync()).Should().Equal("50667");
         (await service.GetTotalPropertyCountAsync()).Should().Be(1);
+        (await service.GetLastImportAsync())!.Source.Should().Be("nrw");
+    }
+
+    [Fact]
+    public async Task DisabledSource_WithOnlyItsImportCompleted_HasNoLastImport()
+    {
+        await using var context = fixture.CreateContext();
+        context.ImportLogs.AddRange(
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "nrw.zip", FileTimestamp = "ts", ImportedAt = 1, RecordCount = 0 },
+            new ImportLog { Source = "he", DatasetName = "ds", FileName = "he.zip", FileTimestamp = "ts", ImportedAt = 2, RecordCount = 5, CompletedAt = 2 });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, new DisabledSources(["he"]));
+
         (await service.GetLastImportAsync()).Should().BeNull("the only non-empty import belongs to the disabled source");
+        (await service.GetTotalPropertyCountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetTotalPropertyCountAsync_SumsLatestCompletedImportPerSource()
+    {
+        await using var context = fixture.CreateContext();
+        context.ImportLogs.AddRange(
+            // Superseded by the newer nrw import, which replaced its rows.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 1, RecordCount = 100, CompletedAt = 1 },
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = 3, RecordCount = 120, CompletedAt = 3 },
+            // Failed attempt: its rows were never swapped in.
+            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = 4, RecordCount = 0 },
+            new ImportLog { Source = "sh", DatasetName = "ds", FileName = "sh", FileTimestamp = "ts1", ImportedAt = 2, RecordCount = 30, CompletedAt = 2 });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, DisabledSources.None);
+
+        (await service.GetTotalPropertyCountAsync()).Should().Be(150);
     }
 }
