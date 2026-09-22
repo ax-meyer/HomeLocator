@@ -3,15 +3,20 @@
 @inject FilterOptionsService FilterOptionsService
 @inject GeocodingService GeocodingService
 @inject AppMetrics AppMetrics
+@inject SupportedStates SupportedStates
 @using Grundstuecksfinder.Services
 @using Grundstuecksfinder.Models
 
 <PageTitle>Grundstücksfinder</PageTitle>
 
 <h1 class="mb-1">Grundstücksfinder</h1>
-<p class="text-muted mb-3">
+<p class="text-muted @(SupportedStates.Names.Count > 0 ? "mb-1" : "mb-3")">
     Finde die Adresse eines Grundstücks oder Hauses anhand von PLZ / Gemeinde und Grundstücksgröße.
 </p>
+@if (SupportedStates.Names.Count > 0)
+{
+    <p class="text-muted mb-3">Verfügbar für: @string.Join(", ", SupportedStates.Names)</p>
+}
 
 @if (_lastCheckedAt == null)
 {
