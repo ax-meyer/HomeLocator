@@ -627,4 +627,55 @@ public sealed class InspirePropertyImporterTests
 
         public void Dispose() => _listener.Dispose();
     }
+
+    // ── Addresses paged with startIndex (Hamburg) ────────────────────────────
+
+    [Fact]
+    public async Task FetchAsync_AddressBboxFails_AndPagingIsOff_FailsTheImport()
+    {
+        var server = GridServer(10);
+        server.FailAddressBbox = true;
+
+        var fetch = async () => await FetchAllAsync(Importer(server, Options()));
+
+        await fetch.Should().ThrowAsync<Exception>("without paging there is no way around a broken bbox filter");
+    }
+
+    [Fact]
+    public async Task FetchAsync_PagingConfigured_FetchesEveryAddressWithStartIndexAndNoBbox()
+    {
+        var server = GridServer(10); // 100 parcels, 100 addresses
+        server.FailAddressBbox = true;
+
+        var rows = await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.PageSize = 30;
+            o.PageAddressesWithStartIndex = true;
+        })));
+
+        rows.Select(r => r.Str).Should().OnlyHaveUniqueItems().And.HaveCount(100);
+        rows.Single(r => r.Str == "Straße 01_02").FlaecheAmtl.Should().Be(100 + 1 * 10 + 2);
+
+        var addressRequests = server.GetFeatureRequests(FakeWfsServer.AddressUrl).ToList();
+        addressRequests.Should().OnlyContain(u => !u.Query.Contains("bbox"), "the bbox filter is what paging avoids");
+        addressRequests.Should().OnlyContain(u => u.Query.Contains("startIndex"));
+        addressRequests.Select(u => u.Query).Should().HaveCount(4, "30 + 30 + 30 + 10 addresses ends the paging");
+    }
+
+    [Fact]
+    public async Task FetchAsync_PagingConfigured_ServerIgnoresStartIndex_FailsTheImport()
+    {
+        var server = GridServer(10);
+        server.FailAddressBbox = true;
+        server.IgnoreStartIndex = true; // hands out its first page forever
+
+        var fetch = async () => await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.PageSize = 30;
+            o.PageAddressesWithStartIndex = true;
+        })));
+
+        (await fetch.Should().ThrowAsync<InspireImportException>())
+            .WithMessage("*is startIndex ignored?*");
+    }
 }

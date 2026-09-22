@@ -54,6 +54,14 @@ public partial class InspireSourceOptions
     public int PageSize { get; set; } = 5000;
 
     /// <summary>
+    /// For Hamburg: fetch the addresses once, paging with startIndex, instead of per tile. Its
+    /// address geometries carry SRID 0, so every bbox filter fails server-side ("Operation on
+    /// mixed SRID geometries"). Only for services whose paging is known to be stable — pages
+    /// must not shift between requests, or addresses are silently lost.
+    /// </summary>
+    public bool PageAddressesWithStartIndex { get; set; }
+
+    /// <summary>
     /// For Hamburg/Berlin: the Land itself is the Gemeinde, and the ad:level hierarchy maps
     /// differently (see <see cref="WfsGmlParser"/>).
     /// </summary>

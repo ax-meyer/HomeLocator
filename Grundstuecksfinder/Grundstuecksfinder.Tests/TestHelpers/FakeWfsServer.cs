@@ -28,6 +28,12 @@ public sealed class FakeWfsServer : HttpMessageHandler
     /// <summary>Returns at most this many features per GetFeature, whatever count was asked for.</summary>
     public int? ServerCap { get; set; }
 
+    /// <summary>Answers any bbox request on the address service with Hamburg's mixed-SRID error.</summary>
+    public bool FailAddressBbox { get; set; }
+
+    /// <summary>Answers every paged address request with the first page, as a server that silently ignores startIndex would.</summary>
+    public bool IgnoreStartIndex { get; set; }
+
     /// <summary>CountDefault advertised in GetCapabilities; null advertises none.</summary>
     public int? AdvertisedCountDefault { get; set; }
 
@@ -76,10 +82,29 @@ public sealed class FakeWfsServer : HttpMessageHandler
             return Xml($"""<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberMatched="{hits}" numberReturned="0"/>""");
         }
 
-        var bbox = query["bbox"].Split(',').Take(4)
-            .Select(v => double.Parse(v, CultureInfo.InvariantCulture)).ToArray();
         var count = int.Parse(query["count"], CultureInfo.InvariantCulture);
         var limit = Math.Min(count, ServerCap ?? int.MaxValue);
+
+        // Hamburg's address service: its geometries carry SRID 0, so any bbox fails server-side
+        // and the importer pages with startIndex instead.
+        if (!isParcels && FailAddressBbox && query.ContainsKey("bbox"))
+            return Xml("""
+                <ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1"><ows:Exception>
+                  <ows:ExceptionText>ST_Intersects: Operation on mixed SRID geometries (Point, 0) != (Polygon, 25832)</ows:ExceptionText>
+                </ows:Exception></ows:ExceptionReport>
+                """);
+
+        if (!isParcels && !query.ContainsKey("bbox"))
+        {
+            var startIndex = !IgnoreStartIndex && query.TryGetValue("startIndex", out var raw)
+                ? int.Parse(raw, CultureInfo.InvariantCulture)
+                : 0;
+            return Xml(AddressCollection(Addresses
+                .OrderBy(a => a.Id, StringComparer.Ordinal).Skip(startIndex).Take(limit)));
+        }
+
+        var bbox = query["bbox"].Split(',').Take(4)
+            .Select(v => double.Parse(v, CultureInfo.InvariantCulture)).ToArray();
 
         return isParcels
             ? Xml(ParcelCollection(Parcels

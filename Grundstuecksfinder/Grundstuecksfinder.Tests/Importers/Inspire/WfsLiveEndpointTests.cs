@@ -26,4 +26,22 @@ public partial class WfsLiveEndpointTests
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync();
     }
+
+    /// <summary>
+    /// A GetFeature page addressed by startIndex rather than bbox, for services whose bbox filter
+    /// is unusable (see <see cref="Grundstuecksfinder.Services.Importers.Inspire.InspireSourceOptions.PageAddressesWithStartIndex"/>).
+    /// </summary>
+    private static async Task<Stream> FetchGetFeaturePage(string baseUrl, string typeName, string crs,
+        int startIndex, int count = 5, bool resolve = false)
+    {
+        var resolveSuffix = resolve ? "&resolve=local&resolvedepth=2" : "";
+        var url = $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature" +
+                  $"&typenames={Uri.EscapeDataString(typeName)}" +
+                  $"&srsName={Uri.EscapeDataString(crs)}" +
+                  $"&count={count}&startIndex={startIndex}{resolveSuffix}";
+
+        var response = await Http.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync();
+    }
 }
