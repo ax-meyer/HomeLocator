@@ -98,6 +98,22 @@ public partial class InspireSourceOptions
     public double MaxRetryDelaySeconds { get; set; } = 300;
 
     /// <summary>
+    /// Share of failing requests within <see cref="CircuitSamplingSeconds"/> that opens the
+    /// circuit for this source, so a server that is down fails the import in seconds instead of
+    /// retrying every one of thousands of tiles.
+    /// </summary>
+    public double CircuitFailureRatio { get; set; } = 0.9;
+
+    /// <summary>Requests needed in the sampling window before the ratio is considered at all.</summary>
+    public int CircuitMinimumThroughput { get; set; } = 10;
+
+    /// <summary>Window the failure ratio is measured over.</summary>
+    public double CircuitSamplingSeconds { get; set; } = 60;
+
+    /// <summary>How long the circuit stays open before a single trial request is let through.</summary>
+    public double CircuitBreakSeconds { get; set; } = 30;
+
+    /// <summary>
     /// Minimum share of the address service's reported total that must have been fetched, or
     /// the import fails and the previous data stays.
     /// </summary>
@@ -166,6 +182,14 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
             if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)
                 errors.Add($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds.");
+            if (s.CircuitFailureRatio is <= 0 or > 1)
+                errors.Add($"{name}: CircuitFailureRatio must be greater than 0 and at most 1.");
+            if (s.CircuitMinimumThroughput < 2)
+                errors.Add($"{name}: CircuitMinimumThroughput must be at least 2.");
+            if (s.CircuitSamplingSeconds < 0.5)
+                errors.Add($"{name}: CircuitSamplingSeconds must be at least 0.5.");
+            if (!(s.CircuitBreakSeconds > 0))
+                errors.Add($"{name}: CircuitBreakSeconds must be positive.");
             if (s.MinCompleteness is < 0 or > 1)
                 errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
             if (s.MaxUnmatchedRatio is < 0 or > 1)

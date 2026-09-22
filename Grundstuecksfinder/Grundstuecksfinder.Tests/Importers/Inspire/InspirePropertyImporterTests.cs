@@ -9,6 +9,7 @@ using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using NetTopologySuite.Geometries;
+using Polly.CircuitBreaker;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -187,6 +188,33 @@ public sealed class InspirePropertyImporterTests
 
         await act.Should().ThrowAsync<HttpRequestException>();
         server.GetFeatureRequests(FakeWfsServer.AddressUrl).Should().HaveCount(3, "MaxAttempts is 3");
+    }
+
+    [Fact]
+    public async Task FetchAsync_ServerFailsHalfTheRequests_OpensTheCircuitInsteadOfGrindingOn()
+    {
+        // A degraded server answers often enough that every tile eventually succeeds on retry, so
+        // without a breaker the import would crawl through all 100 tiles at MaxAttempts each.
+        var server = GridServer(2);
+        var requests = 0;
+        server.Interceptor = (uri, _) =>
+        {
+            if (!uri.Query.Contains("bbox=")) return null;
+            requests++;
+            return requests % 2 == 0 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : null;
+        };
+
+        var options = Options(o =>
+        {
+            o.TileSizeMeters = 10;          // 100 tiles
+            o.CircuitMinimumThroughput = 4;
+            o.CircuitFailureRatio = 0.4;
+        });
+
+        var act = () => FetchAllAsync(Importer(server, options));
+
+        await act.Should().ThrowAsync<BrokenCircuitException>();
+        requests.Should().BeLessThan(40, "the circuit opens long before all 100 tiles have been tried");
     }
 
     [Fact]
