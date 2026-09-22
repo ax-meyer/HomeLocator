@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Xml;
 using System.Xml.Linq;
 using Grundstuecksfinder.Models;
+using Grundstuecksfinder.Services.Importers.Postcodes;
 using NetTopologySuite.Geometries;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
@@ -35,7 +36,8 @@ public partial class InspirePropertyImporter(
     ILogger<InspirePropertyImporter> logger,
     IHttpClientFactory httpClientFactory,
     InspireSourceOptions options,
-    TimeProvider? timeProvider = null) : IPropertyImporter
+    TimeProvider? timeProvider = null,
+    IPostcodeAreaProvider? postcodeAreas = null) : IPropertyImporter
 {
     /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
     public const string HttpClientName = "Inspire";
@@ -94,6 +96,9 @@ public partial class InspirePropertyImporter(
 
         var parcelLimit = await GetPageLimitAsync(http, options.ParcelWfsUrl, ct);
         var addressLimit = await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
+        // Loaded before the (long) fetch, so a missing area file fails the import right away.
+        var postcodes = await LoadPostcodeAreasAsync(ct);
+        var plzStats = new PlzFillStats();
 
         // A tile may carry its parcels along: when only the address page of a tile was full, its
         // (complete) parcel page is filtered down to the child tiles instead of fetched again.
@@ -158,7 +163,7 @@ public partial class InspirePropertyImporter(
                     Str = address.Str,
                     Hnr = address.Hnr,
                     HnrZus = address.HnrZus,
-                    Plz = address.Plz,
+                    Plz = postcodes is null ? address.Plz : plzStats.Resolve(address, postcodes),
                     Ort = address.Ort,
                     Gemeinde = address.Gemeinde,
                     FlaecheAmtl = area.Value,
@@ -168,6 +173,8 @@ public partial class InspirePropertyImporter(
 
         var completeness = expectedAddresses == 0 ? 1 : (double)addressCount / expectedAddresses;
         LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount);
+        if (postcodes is not null)
+            LogPlzSummary(logger, Source, plzStats.Filled, plzStats.Missing, plzStats.Agreeing, plzStats.Official);
 
         if (completeness < options.MinCompleteness)
             throw new InspireImportException(FormattableString.Invariant(
@@ -176,6 +183,45 @@ public partial class InspirePropertyImporter(
         if (addressCount > 0 && (double)unmatchedCount / addressCount > options.MaxUnmatchedRatio)
             throw new InspireImportException(FormattableString.Invariant(
                 $"{Source}: {unmatchedCount} of {addressCount} addresses have no containing parcel (maximum {options.MaxUnmatchedRatio:P0}) — is the Crs right?"));
+
+        if (postcodes is not null && plzStats.Missing > 0 && (double)plzStats.Filled / plzStats.Missing < options.MinPostcodeFillRatio)
+            throw new InspireImportException(FormattableString.Invariant(
+                $"{Source}: only {plzStats.Filled} of {plzStats.Missing} addresses without a PLZ lie in a postcode area (minimum {options.MinPostcodeFillRatio:P0}); is the area file right?"));
+    }
+
+    private async Task<IPostcodeLookup?> LoadPostcodeAreasAsync(CancellationToken ct)
+    {
+        if (!options.FillMissingPlzFromPostcodeAreas) return null;
+        if (postcodeAreas is null)
+            throw new InvalidOperationException($"{Source}: FillMissingPlzFromPostcodeAreas is set, but no postcode area provider was given.");
+
+        var b = options.BoundingBox;
+        return await postcodeAreas.LoadAsync(options.CrsEpsgCode!.Value, new Envelope(b.MinX, b.MaxX, b.MinY, b.MaxY), ct);
+    }
+
+    /// <summary>Fills missing PLZ from the postcode areas and counts how that went.</summary>
+    private sealed class PlzFillStats
+    {
+        public long Missing { get; private set; }
+        public long Filled { get; private set; }
+        public long Official { get; private set; }
+        public long Agreeing { get; private set; }
+
+        public string? Resolve(AddressFeature address, IPostcodeLookup postcodes)
+        {
+            var fromArea = postcodes.FindPostcode(address.Location);
+            if (string.IsNullOrEmpty(address.Plz))
+            {
+                Missing++;
+                if (fromArea is not null) Filled++;
+                return fromArea;
+            }
+
+            // The source's own PLZ wins; comparing shows how far the areas can be trusted.
+            Official++;
+            if (fromArea == address.Plz) Agreeing++;
+            return address.Plz;
+        }
     }
 
     private IEnumerable<Tile> InitialTiles()
@@ -405,6 +451,9 @@ public partial class InspirePropertyImporter(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: fetched {Fetched} of {Expected} addresses ({Completeness:P1}); {Unmatched} had no containing parcel")]
     private static partial void LogFetchSummary(ILogger logger, string source, long fetched, long expected, double completeness, long unmatched);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: filled the PLZ of {Filled} of {Missing} addresses without one from postcode areas; the areas agree with {Agreeing} of {Official} PLZ the source publishes")]
+    private static partial void LogPlzSummary(ILogger logger, string source, long filled, long missing, long agreeing, long official);
 }
 
 /// <summary>

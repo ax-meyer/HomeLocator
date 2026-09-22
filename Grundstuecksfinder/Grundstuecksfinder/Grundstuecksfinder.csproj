@@ -20,10 +20,12 @@
              both an MSB3277 conflict warning and a runtime
              FileNotFoundException. -->
         <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+        <PackageReference Include="NetTopologySuite.IO.GeoJSON" Version="4.0.0" />
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
         <!-- In-memory point-in-polygon spatial join for INSPIRE importers only; Property
              stores no geometry, so PostGIS/Npgsql.NetTopologySuite are not needed. -->
         <PackageReference Include="NetTopologySuite" Version="2.6.0" />
+        <PackageReference Include="ProjNET" Version="2.1.0" />
         <PackageReference Include="Radzen.Blazor" Version="11.4.1" />
         <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
         <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />

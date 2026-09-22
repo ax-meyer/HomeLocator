@@ -67,6 +67,19 @@ public partial class InspireSourceOptions
     public bool UsePostNameAsOrt { get; set; } = true;
 
     /// <summary>
+    /// For sources that publish (almost) no PLZ (BB, HE): an address without one gets the PLZ of
+    /// the postcode area containing it (see "Import:PostcodeAreas"). Addresses that do carry a
+    /// PLZ keep it; they're only compared with the areas, as a logged plausibility check.
+    /// </summary>
+    public bool FillMissingPlzFromPostcodeAreas { get; set; }
+
+    /// <summary>
+    /// With <see cref="FillMissingPlzFromPostcodeAreas"/>: minimum share of PLZ-less addresses
+    /// that must lie in some postcode area, or the import fails (broken or foreign area file).
+    /// </summary>
+    public double MinPostcodeFillRatio { get; set; } = 0.95;
+
+    /// <summary>
     /// Limit for one WFS request including reading and parsing the whole response. Covers what
     /// HttpClient.Timeout doesn't when streaming: a server stalling mid-body.
     /// </summary>
@@ -157,6 +170,8 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
             if (s.MaxUnmatchedRatio is < 0 or > 1)
                 errors.Add($"{name}: MaxUnmatchedRatio must be between 0 and 1.");
+            if (s.MinPostcodeFillRatio is < 0 or > 1)
+                errors.Add($"{name}: MinPostcodeFillRatio must be between 0 and 1.");
         }
         return errors;
     }
