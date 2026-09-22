@@ -18,22 +18,17 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
         if (cache.TryGetValue(cacheKey, out (double Lat, double Lon) cached))
             return cached;
 
-        var query = BuildQuery(property);
-        if (query is null) return null;
-
         try
         {
             var http = httpClientFactory.CreateClient("Nominatim");
-            var results = await http.GetFromJsonAsync<NominatimResult[]>(
-                $"search?{query}&format=json&limit=1&countrycodes=de");
+            var coords = await SearchAsync(http, BuildQuery(property, includeCity: true));
+            // A wrong Ort (e.g. SH's shared postal names: all of Fehmarn as "Petersdorf a. F.")
+            // makes Nominatim find nothing; street + postcode alone still pin the address down.
+            if (coords is null && HasPostcodeAndCity(property))
+                coords = await SearchAsync(http, BuildQuery(property, includeCity: false));
+            if (coords is null) return null;
 
-            var first = results?.FirstOrDefault();
-            if (first is null) return null;
-
-            var coords = (double.Parse(first.Lat, System.Globalization.CultureInfo.InvariantCulture),
-                          double.Parse(first.Lon, System.Globalization.CultureInfo.InvariantCulture));
-
-            cache.Set(cacheKey, coords, CacheDuration);
+            cache.Set(cacheKey, coords.Value, CacheDuration);
             return coords;
         }
         catch
@@ -42,7 +37,24 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
         }
     }
 
-    private static string? BuildQuery(Property p)
+    private static async Task<(double Lat, double Lon)?> SearchAsync(HttpClient http, string? query)
+    {
+        if (query is null) return null;
+
+        var results = await http.GetFromJsonAsync<NominatimResult[]>(
+            $"search?{query}&format=json&limit=1&countrycodes=de");
+
+        var first = results?.FirstOrDefault();
+        if (first is null) return null;
+
+        return (double.Parse(first.Lat, System.Globalization.CultureInfo.InvariantCulture),
+                double.Parse(first.Lon, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static bool HasPostcodeAndCity(Property p) =>
+        !string.IsNullOrWhiteSpace(p.Plz) && PlaceNameNormalizer.NormalizePlace(p.Ort) is not null;
+
+    private static string? BuildQuery(Property p, bool includeCity)
     {
         // Normalize again here so rows imported before the importer cleaned names up
         // ("Stadt Pirna", "Kiel, Landeshauptstadt", "Cottbus [Chóśebuz]") still geocode.
@@ -54,7 +66,7 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
             parts.Add($"street={Uri.EscapeDataString($"{p.Hnr} {str}")}");
         if (!string.IsNullOrWhiteSpace(p.Plz))
             parts.Add($"postalcode={Uri.EscapeDataString(p.Plz)}");
-        if (ort is not null)
+        if (includeCity && ort is not null)
             parts.Add($"city={Uri.EscapeDataString(ort)}");
 
         return parts.Count == 0 ? null : string.Join("&", parts);

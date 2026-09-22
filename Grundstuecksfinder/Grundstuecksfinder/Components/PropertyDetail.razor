@@ -69,6 +69,7 @@
         "nrw" => Coords != default
             ? FormattableString.Invariant($"https://www.umgebungslaerm-kartierung.nrw.de/#map=15/{Coords.Lon}/{Coords.Lat}")
             : "https://www.umgebungslaerm-kartierung.nrw.de/",
+        "sh" => "https://danord.gdi-sh.de/viewer/resources/apps/umgebungslaerm/index.html?lang=de",
         _ => null,
     };
 
@@ -77,6 +78,7 @@
         "nrw" => Coords != default
             ? FormattableString.Invariant($"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15")
             : "https://www.hochwasserkarten.nrw.de/",
+        // "sh" — deep linking broken (redirects to Cadenza login); revisit later
         _ => null,
     };
 

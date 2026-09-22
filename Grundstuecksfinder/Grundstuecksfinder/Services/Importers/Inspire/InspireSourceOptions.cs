@@ -60,6 +60,13 @@ public partial class InspireSourceOptions
     public bool IsCityState { get; set; }
 
     /// <summary>
+    /// Whether an address's postal town name (PostalDescriptor postName) may serve as its Ort
+    /// when no Ortsteil is given. False for sources that carry one arbitrary postName per
+    /// postcode (SH: all of Fehmarn is "Petersdorf a. F."); Ort then falls back to the Gemeinde.
+    /// </summary>
+    public bool UsePostNameAsOrt { get; set; } = true;
+
+    /// <summary>
     /// Limit for one WFS request including reading and parsing the whole response. Covers what
     /// HttpClient.Timeout doesn't when streaming: a server stalling mid-body.
     /// </summary>

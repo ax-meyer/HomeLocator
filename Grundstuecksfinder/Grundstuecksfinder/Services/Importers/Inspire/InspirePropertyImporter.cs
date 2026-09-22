@@ -127,7 +127,7 @@ public partial class InspirePropertyImporter(
             if (parcels.Count == 0) continue;
 
             var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
-                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState), ct);
+                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
             if (addresses.MemberCount >= addressLimit)
             {
                 foreach (var child in Split(tile))
