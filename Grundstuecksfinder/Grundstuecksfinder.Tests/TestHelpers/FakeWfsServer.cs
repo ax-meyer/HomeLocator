@@ -8,8 +8,8 @@ namespace Grundstuecksfinder.Tests.TestHelpers;
 /// <summary>A square-ish parcel for <see cref="FakeWfsServer"/>, in the server's CRS.</summary>
 public sealed record FakeParcel(string Id, double MinX, double MinY, double MaxX, double MaxY, double AreaM2);
 
-/// <summary>An address point for <see cref="FakeWfsServer"/>, in the server's CRS.</summary>
-public sealed record FakeAddress(string Id, double X, double Y, string Street, string Hnr);
+/// <summary>An address point for <see cref="FakeWfsServer"/>, in the server's CRS; Plz null publishes none.</summary>
+public sealed record FakeAddress(string Id, double X, double Y, string Street, string Hnr, string? Plz = null);
 
 /// <summary>
 /// In-memory stand-in for a state's parcel + address INSPIRE WFS pair. Answers GetCapabilities,
@@ -141,7 +141,7 @@ public sealed class FakeWfsServer : HttpMessageHandler
                     <designator>{a.Hnr}</designator>
                     <type xlink:href="http://inspire.ec.europa.eu/codelist/LocatorDesignatorTypeValue/addressNumber"/>
                   </LocatorDesignator></designator></AddressLocator></locator>
-                  <component xlink:href="#TN_{a.Id}"/>
+                  <component xlink:href="#TN_{a.Id}"/>{(a.Plz is null ? "" : $"<component xlink:href=\"#PD_{a.Id}\"/>")}
                   <component xlink:href="#AU_gemeinde"/>
                 </Address></wfs:member>
                 """);
@@ -149,7 +149,11 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
         sb.Append("<wfs:additionalObjects><wfs:SimpleFeatureCollection>");
         foreach (var a in list)
+        {
             sb.Append(CultureInfo.InvariantCulture, $"""<wfs:member><ThoroughfareName gml:id="TN_{a.Id}">{Name(a.Street)}</ThoroughfareName></wfs:member>""");
+            if (a.Plz is not null)
+                sb.Append(CultureInfo.InvariantCulture, $"""<wfs:member><PostalDescriptor gml:id="PD_{a.Id}"><postCode>{a.Plz}</postCode></PostalDescriptor></wfs:member>""");
+        }
         sb.Append(CultureInfo.InvariantCulture, $"""<wfs:member><AdminUnitName gml:id="AU_gemeinde"><alternativeIdentifier>01060099</alternativeIdentifier>{Name("Testgemeinde")}</AdminUnitName></wfs:member>""");
         return sb.Append("</wfs:SimpleFeatureCollection></wfs:additionalObjects></wfs:FeatureCollection>").ToString();
     }

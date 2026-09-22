@@ -7,6 +7,7 @@ using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Nrw;
+using Grundstuecksfinder.Services.Importers.Postcodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Npgsql;
@@ -60,12 +61,18 @@ builder.Services.AddSingleton(SupportedStates.FromSources(
 // instead: HttpClient.Timeout stops counting once the headers arrive.
 builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
     client.Timeout = Timeout.InfiniteTimeSpan);
+// Postcode areas for sources without PLZ; the download is bounded by DownloadTimeoutSeconds.
+builder.Services.AddSingleton(builder.Configuration.GetSection("Import:PostcodeAreas").Get<PostcodeAreaOptions>() ?? new PostcodeAreaOptions());
+builder.Services.AddHttpClient(PostcodeAreaProvider.HttpClientName, client =>
+    client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddSingleton<IPostcodeAreaProvider, PostcodeAreaProvider>();
 foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
     builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(
         sp.GetRequiredService<ILogger<InspirePropertyImporter>>(),
         sp.GetRequiredService<IHttpClientFactory>(),
-        inspireSource));
+        inspireSource,
+        postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>()));
 }
 
 var minRetainedRatio = builder.Configuration.GetValue("Import:MinRetainedRatio", PropertyBulkWriter.DefaultMinRetainedRatio);

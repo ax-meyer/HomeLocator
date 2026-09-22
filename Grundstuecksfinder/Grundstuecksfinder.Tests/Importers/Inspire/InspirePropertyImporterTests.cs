@@ -5,8 +5,10 @@ using FluentAssertions;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Logging.Abstractions;
+using NetTopologySuite.Geometries;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -41,11 +43,27 @@ public sealed class InspirePropertyImporterTests
         return options;
     }
 
-    private static InspirePropertyImporter Importer(FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null)
+    private static InspirePropertyImporter Importer(
+        FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null, IPostcodeAreaProvider? postcodeAreas = null)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
-        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time);
+        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas);
+    }
+
+    /// <summary>Postcode areas as vertical strips: "1xxxx" for x &lt; 50, "2xxxx" for 50 ≤ x &lt; 90, none beyond.</summary>
+    private static IPostcodeAreaProvider StripPostcodeAreas()
+    {
+        var lookup = A.Fake<IPostcodeLookup>();
+        A.CallTo(() => lookup.FindPostcode(A<Point>._)).ReturnsLazily((Point p) => p.X switch
+        {
+            < 50 => "10000",
+            < 90 => "20000",
+            _ => null,
+        });
+        var provider = A.Fake<IPostcodeAreaProvider>();
+        A.CallTo(() => provider.LoadAsync(A<int>._, A<Envelope>._, A<CancellationToken>._)).Returns(lookup);
+        return provider;
     }
 
     private static async Task<List<Property>> FetchAllAsync(InspirePropertyImporter importer)
@@ -375,6 +393,100 @@ public sealed class InspirePropertyImporterTests
             """);
 
         InspirePropertyImporter.ParseCountDefault(capabilities).Should().Be(10000);
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlz_TakesThePlzOfTheContainingArea()
+    {
+        var server = GridServer(3); // addresses at x = 5, 15, 25 — all in the "10000" strip
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.FillMissingPlzFromPostcodeAreas = true), postcodeAreas: StripPostcodeAreas()));
+
+        rows.Should().HaveCount(9).And.OnlyContain(r => r.Plz == "10000");
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlz_KeepsThePlzTheSourcePublishes()
+    {
+        var server = new FakeWfsServer();
+        server.Parcels.Add(new FakeParcel("P1", 0, 0, 10, 10, 500));
+        server.Parcels.Add(new FakeParcel("P2", 60, 0, 70, 10, 600));
+        server.Addresses.Add(new FakeAddress("A1", 5, 5, "Amtliche Straße", "1", Plz: "12345"));
+        server.Addresses.Add(new FakeAddress("A2", 65, 5, "Leere Straße", "2"));
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.FillMissingPlzFromPostcodeAreas = true), postcodeAreas: StripPostcodeAreas()));
+
+        rows.Single(r => r.Str == "Amtliche Straße").Plz.Should().Be("12345", "the source's own PLZ wins over the area's 10000");
+        rows.Single(r => r.Str == "Leere Straße").Plz.Should().Be("20000");
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlz_ReplacesAPublishedPlzThatIsNoPlz()
+    {
+        var server = new FakeWfsServer();
+        server.Parcels.Add(new FakeParcel("P1", 0, 0, 10, 10, 500));
+        server.Addresses.Add(new FakeAddress("A1", 5, 5, "Prenzlauer Chaussee", "1", Plz: "Wandlitz"));
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.FillMissingPlzFromPostcodeAreas = true), postcodeAreas: StripPostcodeAreas()));
+
+        rows.Should().ContainSingle().Which.Plz.Should().Be("10000");
+    }
+
+    [Fact]
+    public async Task FetchAsync_TooFewAddressesInAnyArea_Fails()
+    {
+        var server = GridServer(10); // x = 5 … 95: the column at 95 lies outside every area (10 %)
+
+        var act = () => FetchAllAsync(Importer(server,
+            Options(o => { o.FillMissingPlzFromPostcodeAreas = true; o.MinPostcodeFillRatio = 0.95; }),
+            postcodeAreas: StripPostcodeAreas()));
+
+        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*90 of 100 addresses without a PLZ*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_SomeAddressesInNoArea_KeepsThemWithoutPlz()
+    {
+        var server = GridServer(10);
+
+        var rows = await FetchAllAsync(Importer(server,
+            Options(o => { o.FillMissingPlzFromPostcodeAreas = true; o.MinPostcodeFillRatio = 0.9; }),
+            postcodeAreas: StripPostcodeAreas()));
+
+        rows.Should().HaveCount(100);
+        rows.Count(r => r.Plz is null).Should().Be(10);
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlzWithoutProvider_FailsBeforeFetchingTiles()
+    {
+        var server = GridServer(1);
+
+        var act = () => FetchAllAsync(Importer(server, Options(o => o.FillMissingPlzFromPostcodeAreas = true)));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*no postcode area provider*");
+        server.GetFeatureRequests(FakeWfsServer.ParcelUrl).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlzOff_DoesNotLoadAreas()
+    {
+        var provider = StripPostcodeAreas();
+
+        var rows = await FetchAllAsync(Importer(GridServer(1), Options(), postcodeAreas: provider));
+
+        rows.Should().ContainSingle().Which.Plz.Should().BeNull();
+        A.CallTo(provider).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task FetchAsync_FillMissingPlz_PassesTheSourceCrsAndBoundingBox()
+    {
+        var provider = StripPostcodeAreas();
+
+        await FetchAllAsync(Importer(GridServer(1), Options(o => o.FillMissingPlzFromPostcodeAreas = true), postcodeAreas: provider));
+
+        A.CallTo(() => provider.LoadAsync(25832, new Envelope(0, 100, 0, 100), A<CancellationToken>._)).MustHaveHappenedOnceExactly();
     }
 
     /// <summary>A response body that never delivers a byte until the read is cancelled.</summary>

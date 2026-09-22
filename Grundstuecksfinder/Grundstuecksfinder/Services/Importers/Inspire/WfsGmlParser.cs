@@ -136,7 +136,7 @@ public static class WfsGmlParser
                     str ??= FirstText(component);
                     break;
                 case "PostalDescriptor":
-                    plz ??= component.Elements().FirstOrDefault(e => e.Name.LocalName == "postCode")?.Value;
+                    plz ??= PostalCode.Normalize(component.Elements().FirstOrDefault(e => e.Name.LocalName == "postCode")?.Value);
                     if (usePostName) postName ??= FirstText(component);
                     break;
                 case "AdminUnitName":
