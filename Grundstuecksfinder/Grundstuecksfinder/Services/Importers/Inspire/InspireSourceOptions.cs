@@ -99,17 +99,31 @@ public partial class InspireSourceOptions
     /// </summary>
     public double RequestTimeoutSeconds { get; set; } = 300;
 
-    /// <summary>Attempts per WFS request (timeouts, 5xx, broken responses) before the import fails.</summary>
-    public int MaxAttempts { get; set; } = 6;
+    /// <summary>
+    /// Attempts per WFS request (timeouts, 5xx, broken responses) before the request is given up
+    /// on. A tile whose requests are given up on is skipped, up to <see cref="MaxFailedTiles"/>.
+    /// </summary>
+    public int MaxAttempts { get; set; } = 10;
 
     /// <summary>
     /// Wait before the first retry; doubles with every further attempt (with jitter), up to
-    /// <see cref="MaxRetryDelaySeconds"/>. The defaults ride out about five minutes of outage.
+    /// <see cref="MaxRetryDelaySeconds"/>. The defaults ride out about an hour of outage —
+    /// long enough for a service's nightly maintenance window, and the longest one request may
+    /// hold up the import before its tile is skipped.
     /// </summary>
     public double RetryBaseDelaySeconds { get; set; } = 10;
 
     /// <summary>Upper bound for one retry wait, including a server's Retry-After.</summary>
-    public double MaxRetryDelaySeconds { get; set; } = 300;
+    public double MaxRetryDelaySeconds { get; set; } = 900;
+
+    /// <summary>
+    /// How many tiles may be skipped after their requests kept failing before the import fails
+    /// anyway. One broken tile out of a state's thousands is far inside
+    /// <see cref="MinCompleteness"/>, so it must not throw away hours of fetched data; a server
+    /// failing everywhere must still fail the import instead of silently importing half a state.
+    /// Every skipped tile costs up to a full retry budget, so keep this small.
+    /// </summary>
+    public int MaxFailedTiles { get; set; } = 10;
 
     /// <summary>
     /// Share of failing requests within <see cref="CircuitSamplingSeconds"/> that opens the
@@ -192,6 +206,8 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: PageSize must be positive.");
             if (s.MaxAttempts < 1)
                 errors.Add($"{name}: MaxAttempts must be at least 1.");
+            if (s.MaxFailedTiles < 0)
+                errors.Add($"{name}: MaxFailedTiles must not be negative.");
             if (!(s.RequestTimeoutSeconds > 0))
                 errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
             if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)

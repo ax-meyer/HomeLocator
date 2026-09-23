@@ -18,6 +18,9 @@ var builder = WebApplication.CreateBuilder(args);
 var enableDevSeeding = builder.Configuration.GetValue<bool>("EnableDevSeeding");
 
 builder.Logging.ClearProviders();
+// The console sink is configured here and not in "Serilog:WriteTo" because it needs the
+// invariant culture: the container runs with LANG=de_DE.UTF-8 for the page, and log lines must
+// stay machine-readable. Configuring it in both places wrote every line to the console twice.
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)

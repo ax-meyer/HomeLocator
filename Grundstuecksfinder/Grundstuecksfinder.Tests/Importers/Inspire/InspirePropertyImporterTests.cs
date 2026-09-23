@@ -49,11 +49,12 @@ public sealed class InspirePropertyImporterTests
 
     private static InspirePropertyImporter Importer(
         FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null,
-        IPostcodeAreaProvider? postcodeAreas = null, ILoggerFactory? loggerFactory = null)
+        IPostcodeAreaProvider? postcodeAreas = null, ILoggerFactory? loggerFactory = null,
+        ILogger<InspirePropertyImporter>? logger = null)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
-        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas,
+        return new InspirePropertyImporter(logger ?? NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas,
             loggerFactory: loggerFactory);
     }
 
@@ -199,19 +200,74 @@ public sealed class InspirePropertyImporterTests
         rows.Should().HaveCount(4);
     }
 
+    /// <summary>One 10 m tile of the 10x10 grid, as the WFS bbox filter spells it.</summary>
+    private static bool IsTileOf(Uri uri, string baseUrl, int x, int y) =>
+        uri.ToString().StartsWith(baseUrl, StringComparison.Ordinal)
+        && uri.Query.Contains(FormattableString.Invariant($"bbox={x},{y},{x + 10},{y + 10},"), StringComparison.Ordinal);
+
     [Fact]
-    public async Task FetchAsync_RequestKeepsFailing_FailsTheImportInsteadOfSkippingTheTile()
+    public async Task FetchAsync_OneTileKeepsFailing_SkipsItAndImportsTheRest()
     {
-        var server = GridServer(2);
+        // The real case this exists for: one BW parcel tile answered 500 for hours while the rest
+        // of the state came back fine. Losing 1 of 100 addresses is far inside MinCompleteness,
+        // and must not discard the hours already fetched.
+        var server = GridServer(10);
+        server.Interceptor = (uri, _) => IsTileOf(uri, FakeWfsServer.AddressUrl, 50, 50)
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : null;
+        var logger = new CapturingLogger<InspirePropertyImporter>();
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.TileSizeMeters = 10), logger: logger));
+
+        rows.Should().HaveCount(99).And.NotContain(p => p.Str == "Straße 05_05");
+        server.GetFeatureRequests(FakeWfsServer.AddressUrl).Where(u => IsTileOf(u, FakeWfsServer.AddressUrl, 50, 50))
+            .Should().HaveCount(3, "the tile is only skipped once MaxAttempts are spent");
+        logger.MessagesAt(LogLevel.Warning).Should()
+            .ContainSingle(m => m.Contains("skipping it", StringComparison.Ordinal))
+            .Which.Should().Contain("tile 50,50,60,60").And.Contain("1 of at most 10");
+        logger.MessagesAt(LogLevel.Information).Should().ContainMatch("*fetched 99 of 100*1 tiles were skipped*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_MoreFailingTilesThanAllowed_FailsTheImport()
+    {
+        // A server failing all over must not quietly import half a state.
+        var server = GridServer(10);
         server.Interceptor = (uri, _) => uri.ToString().StartsWith(FakeWfsServer.AddressUrl, StringComparison.Ordinal)
-                                         && uri.Query.Contains("bbox=")
+                                         && uri.Query.Contains("bbox=", StringComparison.Ordinal)
             ? new HttpResponseMessage(HttpStatusCode.BadGateway)
             : null;
 
-        var act = () => FetchAllAsync(Importer(server, Options()));
+        var act = () => FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.TileSizeMeters = 10;
+            o.MaxFailedTiles = 2;
+        })));
 
-        await act.Should().ThrowAsync<HttpRequestException>();
-        server.GetFeatureRequests(FakeWfsServer.AddressUrl).Should().HaveCount(3, "MaxAttempts is 3");
+        var thrown = (await act.Should().ThrowAsync<InspireImportException>()
+            .WithMessage("*gave up on 3 tiles (maximum 2)*")).Which;
+        thrown.InnerException.Should().BeOfType<WfsHttpException>("the failure that broke the budget is kept");
+        server.GetFeatureRequests(FakeWfsServer.AddressUrl).Should().HaveCount(9,
+            "it stops at the fourth failing tile, each tried MaxAttempts times");
+    }
+
+    [Fact]
+    public async Task FetchAsync_SkippedTilesLeaveTooMuchMissing_FailsTheCompletenessCheck()
+    {
+        // Under MaxFailedTiles, but the completeness check is the real safety net behind it.
+        var server = GridServer(10);
+        server.Interceptor = (uri, _) => uri.ToString().StartsWith(FakeWfsServer.AddressUrl, StringComparison.Ordinal)
+                                         && uri.Query.Contains("bbox=0,", StringComparison.Ordinal)
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : null;
+
+        var act = () => FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.TileSizeMeters = 10;       // the x=0 column is 10 of the 100 tiles
+            o.MaxFailedTiles = 20;
+        })));
+
+        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*fetched only 90 of 100 addresses*");
     }
 
     [Fact]
@@ -353,9 +409,12 @@ public sealed class InspirePropertyImporterTests
             ? XmlOk("""<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0"><wfs:truncatedResponse/></wfs:FeatureCollection>""")
             : null;
 
-        var act = () => FetchAllAsync(Importer(server, Options()));
+        // MaxFailedTiles = 0 so the tile's own failure surfaces: a truncated response must never
+        // be read as an empty tile, and skipping the tile must keep what went wrong with it.
+        var act = () => FetchAllAsync(Importer(server, Options(o => o.MaxFailedTiles = 0)));
 
-        await act.Should().ThrowAsync<WfsResponseException>().WithMessage("*truncated*");
+        var thrown = (await act.Should().ThrowAsync<InspireImportException>().WithMessage("*gave up on 1 tiles*")).Which;
+        thrown.InnerException.Should().BeOfType<WfsResponseException>().Which.Message.Should().Contain("truncated");
     }
 
     [Fact]
