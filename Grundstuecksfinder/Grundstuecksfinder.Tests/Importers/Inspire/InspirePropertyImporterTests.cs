@@ -792,4 +792,70 @@ public sealed class InspirePropertyImporterTests
         (await fetch.Should().ThrowAsync<InspireImportException>())
             .WithMessage("*is startIndex ignored?*");
     }
+
+    // ── Addresses paged via OGC API Features (Saarland) ──────────────────────
+
+    [Fact]
+    public async Task FetchAsync_OgcApiAddressesConfigured_FetchesEveryAddressByOffset()
+    {
+        var server = GridServer(10); // 100 parcels, 100 addresses
+
+        var rows = await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.UseOgcApiAddresses = true;
+            o.OgcApiAddressPageSize = 30;
+        })));
+
+        rows.Select(r => r.Str).Should().OnlyHaveUniqueItems().And.HaveCount(100);
+        rows.Single(r => r.Str == "Straße 01_02").FlaecheAmtl.Should().Be(100 + 1 * 10 + 2);
+
+        // Excludes the initial "limit=1" hits check that establishes the expected total.
+        var pageRequests = server.OgcApiRequests(FakeWfsServer.AddressUrl).Where(u => u.Query.Contains("offset")).ToList();
+        pageRequests.Should().OnlyContain(u => !u.Query.Contains("bbox"), "the whole address set is fetched in one pass");
+        pageRequests.Should().HaveCount(4, "30 + 30 + 30 + 10 addresses ends the paging");
+    }
+
+    [Fact]
+    public async Task FetchAsync_OgcApiAddresses_ServerIgnoresOffset_FailsTheImport()
+    {
+        var server = GridServer(10);
+        server.IgnoreOffset = true; // hands out its first page forever
+
+        var fetch = async () => await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.UseOgcApiAddresses = true;
+            o.OgcApiAddressPageSize = 30;
+        })));
+
+        (await fetch.Should().ThrowAsync<InspireImportException>())
+            .WithMessage("*is offset ignored?*");
+    }
+
+    /// <summary>
+    /// Regression test for a bug the live tests caught: Saarland's real OGC API server answers
+    /// its HTML viewer instead of GeoJSON unless Accept explicitly asks for it. The fake mimics
+    /// that quirk, so this fails (a JsonException after exhausted retries) if the importer ever
+    /// stops sending the header.
+    /// </summary>
+    [Fact]
+    public async Task FetchAsync_OgcApiAddresses_SendsAcceptHeaderForGeoJson()
+    {
+        var server = GridServer(3); // 9 parcels, 9 addresses
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.UseOgcApiAddresses = true)));
+
+        rows.Should().HaveCount(9);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_OgcApiAddressesConfigured_ReadsHitsFromTheOgcApiEndpoint()
+    {
+        var server = GridServer(2); // 4 parcels, 4 addresses
+
+        var candidates = await Importer(server, Options(o => o.UseOgcApiAddresses = true))
+            .DiscoverAsync(TestContext.Current.CancellationToken);
+
+        candidates.Should().ContainSingle().Which.VersionTimestamp.Should().StartWith("4:4:");
+        server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
+    }
 }

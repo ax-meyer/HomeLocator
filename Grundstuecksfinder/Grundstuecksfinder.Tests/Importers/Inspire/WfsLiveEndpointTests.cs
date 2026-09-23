@@ -17,9 +17,12 @@ public partial class WfsLiveEndpointTests
         int count = 5, bool resolve = false)
     {
         var resolveSuffix = resolve ? "&resolve=local&resolvedepth=2" : "";
+        // srsName, like the importer sends it: without it a server answers in its own default,
+        // which for Saarland is EPSG:4258 — degrees, and in latitude/longitude order.
         var url = $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature" +
                   $"&typenames={Uri.EscapeDataString(typeName)}" +
                   $"&bbox={bbox},{Uri.EscapeDataString(crs)}" +
+                  $"&srsName={Uri.EscapeDataString(crs)}" +
                   $"&count={count}&startIndex=0{resolveSuffix}";
 
         var response = await Http.GetAsync(url);
@@ -41,6 +44,22 @@ public partial class WfsLiveEndpointTests
                   $"&count={count}&startIndex={startIndex}{resolveSuffix}";
 
         var response = await Http.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync();
+    }
+
+    /// <summary>
+    /// A page from an OGC API Features "items" endpoint (see
+    /// <see cref="Grundstuecksfinder.Services.Importers.Inspire.InspireSourceOptions.UseOgcApiAddresses"/>),
+    /// addressed by limit/offset rather than a WFS bbox.
+    /// </summary>
+    private static async Task<Stream> FetchOgcApiFeatures(string baseUrl, int limit, int offset = 0)
+    {
+        var url = $"{baseUrl}?limit={limit}&offset={offset}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        // Without an explicit Accept, Saarland's server answers its HTML viewer instead of GeoJSON.
+        request.Headers.Accept.ParseAdd("application/geo+json");
+        var response = await Http.SendAsync(request);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync();
     }

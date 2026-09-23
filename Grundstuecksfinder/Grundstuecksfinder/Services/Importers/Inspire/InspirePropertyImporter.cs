@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Grundstuecksfinder.Models;
@@ -16,7 +17,10 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// <summary>
 /// Imports an INSPIRE-split Bundesland: joins the separate cp:CadastralParcel (area+geometry)
 /// and ad:Address (text+geometry) WFS services by point-in-polygon, since neither carries both.
-/// One <see cref="InspireSourceOptions"/> instance = one state.
+/// One <see cref="InspireSourceOptions"/> instance = one state. The address side can instead come
+/// from an OGC API Features "items" endpoint carrying an ALKIS-native schema (<see
+/// cref="InspireSourceOptions.UseOgcApiAddresses"/>), for a state whose INSPIRE address WFS is
+/// too slow to page through — the parcel side always stays on the INSPIRE WFS.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -84,7 +88,9 @@ public partial class InspirePropertyImporter(
         try
         {
             parcelHits = await GetHitsAsync(http, options.ParcelWfsUrl, ParcelType, ct);
-            addressHits = await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct);
+            addressHits = options.UseOgcApiAddresses
+                ? await GetOgcApiHitsAsync(http, options.AddressWfsUrl, ct)
+                : await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -116,11 +122,15 @@ public partial class InspirePropertyImporter(
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
 
-        var expectedAddresses = await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct)
+        var expectedAddresses = (options.UseOgcApiAddresses
+                ? await GetOgcApiHitsAsync(http, options.AddressWfsUrl, ct)
+                : await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct))
             ?? throw new InspireImportException($"{Source}: the address service no longer reports a feature count.");
 
         var parcelLimit = await GetPageLimitAsync(http, options.ParcelWfsUrl, ct);
-        var addressLimit = await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
+        var addressLimit = options.UseOgcApiAddresses
+            ? options.OgcApiAddressPageSize
+            : await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
         // Loaded before the (long) fetch, so a missing area file fails the import right away.
         var postcodes = await LoadPostcodeAreasAsync(ct);
         var nameCatalog = options.NameCatalog.IsConfigured && nameCatalogLoader is not null
@@ -128,7 +138,9 @@ public partial class InspirePropertyImporter(
             : null;
         var pagedAddresses = options.PageAddressesWithStartIndex
             ? await FetchAllAddressesAsync(http, addressLimit, expectedAddresses, nameCatalog, ct)
-            : null;
+            : options.UseOgcApiAddresses
+                ? await FetchAllAddressesFromOgcApiAsync(http, expectedAddresses, ct)
+                : null;
         var plzStats = new PlzFillStats();
 
         // A tile may carry its parcels along: when only the address page of a tile was full, its
@@ -382,6 +394,50 @@ public partial class InspirePropertyImporter(
         return new AddressSpatialIndex(all);
     }
 
+    /// <summary>
+    /// Fetches every address in one pass from an OGC API Features "items" endpoint, paging with
+    /// limit/offset, for a source whose INSPIRE address WFS is usable but far too slow (Saarland:
+    /// ~5 addr/s at any tile size vs ~800 addr/s here). See <see cref="OgcApiAddressParser"/>.
+    /// </summary>
+    private async Task<AddressSpatialIndex> FetchAllAddressesFromOgcApiAsync(HttpClient http, long expected, CancellationToken ct)
+    {
+        var pageSize = options.OgcApiAddressPageSize;
+        var all = new List<AddressFeature>();
+        // A server that silently ignores offset would hand out its first page forever.
+        var limit = expected + pageSize;
+        for (var offset = 0L; ; offset += pageSize)
+        {
+            var url = FormattableString.Invariant($"{options.AddressWfsUrl}?limit={pageSize}&offset={offset}");
+            var what = FormattableString.Invariant($"offset={offset}");
+            var page = await WithRetryAsync(async token =>
+            {
+                using var doc = await GetJsonAsync(http, url, token);
+                return OgcApiAddressParser.ParseAddresses(doc);
+            }, AddressType, what, ct);
+            all.AddRange(page.Features);
+
+            if (all.Count > limit)
+                throw new InspireImportException(FormattableString.Invariant(
+                    $"{Source}: paging the address service passed {all.Count} addresses although it reports {expected}; is offset ignored?"));
+            if (page.MemberCount < pageSize) break;
+        }
+
+        LogPagedAddresses(logger, Source, all.Count, expected);
+        return new AddressSpatialIndex(all);
+    }
+
+    /// <summary>numberMatched from an OGC API Features "items" endpoint, via the smallest allowed page.</summary>
+    private async Task<long?> GetOgcApiHitsAsync(HttpClient http, string baseUrl, CancellationToken ct)
+    {
+        var url = FormattableString.Invariant($"{baseUrl}?limit=1");
+        return await WithRetryAsync(async token =>
+        {
+            using var doc = await GetJsonAsync(http, url, token);
+            return doc.RootElement.TryGetProperty("numberMatched", out var value) && value.TryGetInt64(out var matched)
+                ? matched : (long?)null;
+        }, AddressType, "hits", ct);
+    }
+
     private Task<WfsPage<T>> FetchPageAsync<T>(
         HttpClient http, string baseUrl, string typeName, Tile tile, int count,
         Func<XDocument, WfsPage<T>> parse, CancellationToken ct)
@@ -467,8 +523,24 @@ public partial class InspirePropertyImporter(
 
     private async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
     {
+        await using var body = await FetchBodyAsync(http, url, ct);
+        return await XDocument.LoadAsync(body, LoadOptions.None, ct);
+    }
+
+    private async Task<JsonDocument> GetJsonAsync(HttpClient http, string url, CancellationToken ct)
+    {
+        // Without an explicit Accept, Saarland's OGC API Features server answers its HTML
+        // viewer instead of GeoJSON.
+        await using var body = await FetchBodyAsync(http, url, ct, "application/geo+json");
+        return await JsonDocument.ParseAsync(body, cancellationToken: ct);
+    }
+
+    private async Task<MemoryStream> FetchBodyAsync(HttpClient http, string url, CancellationToken ct, string? accept = null)
+    {
         await ThrottleAsync(ct);
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (accept is not null) request.Headers.Accept.ParseAdd(accept);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var retryAfter = response.Headers.RetryAfter is { } header
@@ -477,13 +549,13 @@ public partial class InspirePropertyImporter(
             throw new WfsHttpException(response.StatusCode, retryAfter, url);
         }
         // Buffer first: CopyToAsync passes the token to every read, so the per-attempt timeout
-        // can abort a body that stalls. XDocument.LoadAsync doesn't hand its token to the
-        // stream, so parsing straight from the network could hang forever.
+        // can abort a body that stalls. XDocument.LoadAsync/JsonDocument.ParseAsync don't hand
+        // their token to the stream, so parsing straight from the network could hang forever.
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var body = new MemoryStream();
+        var body = new MemoryStream();
         await stream.CopyToAsync(body, ct);
         body.Position = 0;
-        return await XDocument.LoadAsync(body, LoadOptions.None, ct);
+        return body;
     }
 
     /// <summary>
@@ -611,13 +683,13 @@ public partial class InspirePropertyImporter(
     }
 
     /// <summary>
-    /// <see cref="TransientErrors"/> plus what only a WFS response can go wrong with: a body that
-    /// is truncated, garbled or an error document instead of a FeatureCollection.
+    /// <see cref="TransientErrors"/> plus what only a WFS/OGC API response can go wrong with: a
+    /// body that is truncated, garbled or an error document instead of a feature collection.
     /// </summary>
     private static bool IsTransient(Exception? ex) => ex switch
     {
         WfsHttpException { StatusCode: { } status } => TransientErrors.IsTransientStatus(status),
-        XmlException or WfsResponseException => true,
+        XmlException or JsonException or WfsResponseException => true,
         _ => TransientErrors.IsTransient(ex),
     };
 
@@ -642,7 +714,7 @@ public partial class InspirePropertyImporter(
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source} reported zero parcels or addresses, skipping")]
     private static partial void LogNoFeatures(ILogger logger, string source);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: paged {Fetched} of {Expected} addresses with startIndex, before joining them to parcels")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: paged {Fetched} of {Expected} addresses in one pass, before joining them to parcels")]
     private static partial void LogPagedAddresses(ILogger logger, string source, int fetched, long expected);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: repaired {Repaired} damaged names from the catalogue; {Unrepairable} kept as published")]

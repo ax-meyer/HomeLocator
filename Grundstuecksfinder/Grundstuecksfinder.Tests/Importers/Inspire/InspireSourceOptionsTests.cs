@@ -59,4 +59,28 @@ public sealed class InspireSourceOptionsTests
 
         errors.Should().HaveCount(9);
     }
+
+    [Fact]
+    public void Validate_BothAddressPagingStrategiesSet_IsRejected()
+    {
+        var broken = Valid();
+        broken.PageAddressesWithStartIndex = true;
+        broken.UseOgcApiAddresses = true;
+
+        var errors = InspireSourceOptions.Validate([broken], []);
+
+        errors.Should().ContainSingle(e => e.Contains("mutually exclusive"));
+    }
+
+    [Fact]
+    public void Validate_OgcApiAddressesWithNonPositivePageSize_IsRejected()
+    {
+        var broken = Valid();
+        broken.UseOgcApiAddresses = true;
+        broken.OgcApiAddressPageSize = 0;
+
+        var errors = InspireSourceOptions.Validate([broken], []);
+
+        errors.Should().ContainSingle(e => e.Contains("OgcApiAddressPageSize"));
+    }
 }

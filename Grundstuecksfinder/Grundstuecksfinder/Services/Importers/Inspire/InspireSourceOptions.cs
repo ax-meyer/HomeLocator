@@ -25,7 +25,10 @@ public partial class InspireSourceOptions
     /// <summary>Base URL of the cp:CadastralParcel WFS (INSPIRE download service).</summary>
     public string ParcelWfsUrl { get; set; } = string.Empty;
 
-    /// <summary>Base URL of the ad:Address WFS (INSPIRE download service).</summary>
+    /// <summary>
+    /// Base URL of the address source: the ad:Address WFS (INSPIRE download service), or — with
+    /// <see cref="UseOgcApiAddresses"/> — an OGC API Features collection's "items" endpoint.
+    /// </summary>
     public string AddressWfsUrl { get; set; } = string.Empty;
 
     /// <summary>
@@ -60,6 +63,21 @@ public partial class InspireSourceOptions
     /// must not shift between requests, or addresses are silently lost.
     /// </summary>
     public bool PageAddressesWithStartIndex { get; set; }
+
+    /// <summary>
+    /// For Saarland: fetch the addresses once from an OGC API Features "items" endpoint carrying
+    /// the ALKIS-native Hauskoordinaten schema (GeoJSON, paged with limit/offset — see
+    /// <see cref="OgcApiAddressParser"/>) instead of its hopelessly slow INSPIRE ad:Address WFS.
+    /// Mutually exclusive with <see cref="PageAddressesWithStartIndex"/>.
+    /// </summary>
+    public bool UseOgcApiAddresses { get; set; }
+
+    /// <summary>
+    /// With <see cref="UseOgcApiAddresses"/>: features requested per page. The server may only
+    /// accept specific values (Saarland: 1, 5, 10, 20, 50, 100, 200, 500, 1000, 2500) — check
+    /// live before changing this.
+    /// </summary>
+    public int OgcApiAddressPageSize { get; set; } = 2500;
 
     /// <summary>
     /// For Hamburg/Berlin: the Land itself is the Gemeinde, and the ad:level hierarchy maps
@@ -213,6 +231,10 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters.");
             if (s.PageSize < 1)
                 errors.Add($"{name}: PageSize must be positive.");
+            if (s.PageAddressesWithStartIndex && s.UseOgcApiAddresses)
+                errors.Add($"{name}: PageAddressesWithStartIndex and UseOgcApiAddresses are mutually exclusive paging strategies.");
+            if (s.UseOgcApiAddresses && s.OgcApiAddressPageSize < 1)
+                errors.Add($"{name}: OgcApiAddressPageSize must be positive.");
             if (s.MaxAttempts < 1)
                 errors.Add($"{name}: MaxAttempts must be at least 1.");
             if (s.MaxFailedTiles < 0)
