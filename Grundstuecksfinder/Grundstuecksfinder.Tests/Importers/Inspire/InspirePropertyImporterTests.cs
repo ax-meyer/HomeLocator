@@ -792,4 +792,42 @@ public sealed class InspirePropertyImporterTests
         (await fetch.Should().ThrowAsync<InspireImportException>())
             .WithMessage("*is startIndex ignored?*");
     }
+
+    // ── Addresses paged via OGC API Features (Saarland) ──────────────────────
+
+    [Fact]
+    public async Task FetchAsync_OgcApiAddressesConfigured_FetchesEveryAddressByOffset()
+    {
+        var server = GridServer(10); // 100 parcels, 100 addresses
+
+        var rows = await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.UseOgcApiAddresses = true;
+            o.OgcApiAddressPageSize = 30;
+        })));
+
+        rows.Select(r => r.Str).Should().OnlyHaveUniqueItems().And.HaveCount(100);
+        rows.Single(r => r.Str == "Straße 01_02").FlaecheAmtl.Should().Be(100 + 1 * 10 + 2);
+
+        // Excludes the initial "limit=1" hits check that establishes the expected total.
+        var pageRequests = server.OgcApiRequests(FakeWfsServer.AddressUrl).Where(u => u.Query.Contains("offset")).ToList();
+        pageRequests.Should().OnlyContain(u => !u.Query.Contains("bbox"), "the whole address set is fetched in one pass");
+        pageRequests.Should().HaveCount(4, "30 + 30 + 30 + 10 addresses ends the paging");
+    }
+
+    [Fact]
+    public async Task FetchAsync_OgcApiAddresses_ServerIgnoresOffset_FailsTheImport()
+    {
+        var server = GridServer(10);
+        server.IgnoreOffset = true; // hands out its first page forever
+
+        var fetch = async () => await FetchAllAsync(Importer(server, Options(o =>
+        {
+            o.UseOgcApiAddresses = true;
+            o.OgcApiAddressPageSize = 30;
+        })));
+
+        (await fetch.Should().ThrowAsync<InspireImportException>())
+            .WithMessage("*is offset ignored?*");
+    }
 }

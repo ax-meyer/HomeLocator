@@ -47,4 +47,20 @@ public partial class WfsLiveEndpointTests
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync();
     }
+
+    /// <summary>
+    /// A page from an OGC API Features "items" endpoint (see
+    /// <see cref="Grundstuecksfinder.Services.Importers.Inspire.InspireSourceOptions.UseOgcApiAddresses"/>),
+    /// addressed by limit/offset rather than a WFS bbox.
+    /// </summary>
+    private static async Task<Stream> FetchOgcApiFeatures(string baseUrl, int limit, int offset = 0)
+    {
+        var url = $"{baseUrl}?limit={limit}&offset={offset}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        // Without an explicit Accept, Saarland's server answers its HTML viewer instead of GeoJSON.
+        request.Headers.Accept.ParseAdd("application/geo+json");
+        var response = await Http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync();
+    }
 }

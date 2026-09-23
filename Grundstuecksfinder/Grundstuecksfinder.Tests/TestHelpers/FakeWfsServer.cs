@@ -34,6 +34,9 @@ public sealed class FakeWfsServer : HttpMessageHandler
     /// <summary>Answers every paged address request with the first page, as a server that silently ignores startIndex would.</summary>
     public bool IgnoreStartIndex { get; set; }
 
+    /// <summary>Answers every OGC API Features address request with the first page, as a server that silently ignores offset would.</summary>
+    public bool IgnoreOffset { get; set; }
+
     /// <summary>CountDefault advertised in GetCapabilities; null advertises none.</summary>
     public int? AdvertisedCountDefault { get; set; }
 
@@ -56,6 +59,10 @@ public sealed class FakeWfsServer : HttpMessageHandler
                             && Query(u).GetValueOrDefault("request") == "GetFeature"
                             && !Query(u).ContainsKey("resultType"));
 
+    /// <summary>OGC API Features "items" requests (limit/offset, no WFS "request" parameter).</summary>
+    public IEnumerable<Uri> OgcApiRequests(string baseUrl) =>
+        Requests.Where(u => u.ToString().StartsWith(baseUrl, StringComparison.Ordinal) && Query(u).ContainsKey("limit"));
+
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!;
@@ -70,6 +77,9 @@ public sealed class FakeWfsServer : HttpMessageHandler
     {
         var query = Query(uri);
         var isParcels = uri.ToString().StartsWith(ParcelUrl, StringComparison.Ordinal);
+
+        if (!isParcels && query.ContainsKey("limit") && !query.ContainsKey("request"))
+            return OgcApiAddressResponse(query);
 
         if (query.GetValueOrDefault("request") == "GetCapabilities")
             return Xml(Capabilities());
@@ -182,6 +192,53 @@ public sealed class FakeWfsServer : HttpMessageHandler
         sb.Append(CultureInfo.InvariantCulture, $"""<wfs:member><AdminUnitName gml:id="AU_gemeinde"><alternativeIdentifier>01060099</alternativeIdentifier>{Name("Testgemeinde")}</AdminUnitName></wfs:member>""");
         return sb.Append("</wfs:SimpleFeatureCollection></wfs:additionalObjects></wfs:FeatureCollection>").ToString();
     }
+
+    /// <summary>
+    /// Answers Saarland's OGC API Features shape: limit/offset paging, GeoJSON with the
+    /// ALKIS-native properties <see cref="Grundstuecksfinder.Services.Importers.Inspire.OgcApiAddressParser"/> reads.
+    /// </summary>
+    private static readonly double[] ZeroCoordinates = [0.0, 0.0];
+
+    private HttpResponseMessage OgcApiAddressResponse(Dictionary<string, string> query)
+    {
+        var limit = int.Parse(query["limit"], CultureInfo.InvariantCulture);
+        var count = Math.Min(limit, ServerCap ?? int.MaxValue);
+        var offset = !IgnoreOffset && query.TryGetValue("offset", out var raw)
+            ? int.Parse(raw, CultureInfo.InvariantCulture)
+            : 0;
+        var page = Addresses.OrderBy(a => a.Id, StringComparer.Ordinal).Skip(offset).Take(count).ToList();
+        var numberMatched = AddressHitsOverride ?? Addresses.Count.ToString(CultureInfo.InvariantCulture);
+
+        var features = page.Select(a => new
+        {
+            type = "Feature",
+            properties = new
+            {
+                gml_id = a.Id,
+                STN = a.Street,
+                HNR = a.Hnr,
+                ADZ = (string?)null,
+                PLZ = a.Plz,
+                ONM = "Testgemeinde",
+                XCOORD = a.X + 32_000_000,
+                YCOORD = a.Y,
+            },
+            geometry = new { type = "Point", coordinates = ZeroCoordinates },
+        });
+        var body = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "FeatureCollection",
+            numberMatched = long.Parse(numberMatched, CultureInfo.InvariantCulture),
+            numberReturned = page.Count,
+            features,
+        });
+        return Json(body);
+    }
+
+    private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, Encoding.UTF8, "application/geo+json"),
+    };
 
     private static string Name(string text) =>
         $"<name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>{SecurityElement.Escape(text)}</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name>";
