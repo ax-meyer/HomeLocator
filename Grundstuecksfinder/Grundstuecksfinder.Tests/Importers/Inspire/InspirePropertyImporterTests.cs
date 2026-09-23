@@ -831,6 +831,22 @@ public sealed class InspirePropertyImporterTests
             .WithMessage("*is offset ignored?*");
     }
 
+    /// <summary>
+    /// Regression test for a bug the live tests caught: Saarland's real OGC API server answers
+    /// its HTML viewer instead of GeoJSON unless Accept explicitly asks for it. The fake mimics
+    /// that quirk, so this fails (a JsonException after exhausted retries) if the importer ever
+    /// stops sending the header.
+    /// </summary>
+    [Fact]
+    public async Task FetchAsync_OgcApiAddresses_SendsAcceptHeaderForGeoJson()
+    {
+        var server = GridServer(3); // 9 parcels, 9 addresses
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.UseOgcApiAddresses = true)));
+
+        rows.Should().HaveCount(9);
+    }
+
     [Fact]
     public async Task DiscoverAsync_OgcApiAddressesConfigured_ReadsHitsFromTheOgcApiEndpoint()
     {

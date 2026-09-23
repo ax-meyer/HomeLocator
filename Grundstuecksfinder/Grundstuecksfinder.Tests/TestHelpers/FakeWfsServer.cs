@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security;
 using System.Text;
 
@@ -70,16 +71,22 @@ public sealed class FakeWfsServer : HttpMessageHandler
         Requests.Add(uri);
 
         var intercepted = Interceptor?.Invoke(uri, index);
-        return Task.FromResult(intercepted ?? Answer(uri));
+        return Task.FromResult(intercepted ?? Answer(uri, request.Headers.Accept));
     }
 
-    private HttpResponseMessage Answer(Uri uri)
+    private HttpResponseMessage Answer(Uri uri, HttpHeaderValueCollection<MediaTypeWithQualityHeaderValue> accept)
     {
         var query = Query(uri);
         var isParcels = uri.ToString().StartsWith(ParcelUrl, StringComparison.Ordinal);
 
         if (!isParcels && query.ContainsKey("limit") && !query.ContainsKey("request"))
+        {
+            // Mimics Saarland's real OGC API server: without an explicit request for GeoJSON, it
+            // answers its HTML viewer instead (see InspirePropertyImporter.GetJsonAsync).
+            if (!accept.Any(v => v.MediaType?.Contains("geo+json", StringComparison.Ordinal) == true))
+                return Html("<!DOCTYPE html><html><head><title>Geoportal</title></head><body>viewer</body></html>");
             return OgcApiAddressResponse(query);
+        }
 
         if (query.GetValueOrDefault("request") == "GetCapabilities")
             return Xml(Capabilities());
@@ -238,6 +245,11 @@ public sealed class FakeWfsServer : HttpMessageHandler
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(body, Encoding.UTF8, "application/geo+json"),
+    };
+
+    private static HttpResponseMessage Html(string body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, Encoding.UTF8, "text/html"),
     };
 
     private static string Name(string text) =>
