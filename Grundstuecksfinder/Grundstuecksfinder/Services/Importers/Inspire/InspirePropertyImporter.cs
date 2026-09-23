@@ -42,6 +42,7 @@ public partial class InspirePropertyImporter(
     InspireSourceOptions options,
     TimeProvider? timeProvider = null,
     IPostcodeAreaProvider? postcodeAreas = null,
+    NameCatalogLoader? nameCatalogLoader = null,
     ILoggerFactory? loggerFactory = null) : IPropertyImporter
 {
     /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
@@ -109,8 +110,11 @@ public partial class InspirePropertyImporter(
         var addressLimit = await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
         // Loaded before the (long) fetch, so a missing area file fails the import right away.
         var postcodes = await LoadPostcodeAreasAsync(ct);
+        var nameCatalog = options.NameCatalog.IsConfigured && nameCatalogLoader is not null
+            ? await nameCatalogLoader.LoadAsync(options.NameCatalog, ct)
+            : null;
         var pagedAddresses = options.PageAddressesWithStartIndex
-            ? await FetchAllAddressesAsync(http, addressLimit, expectedAddresses, ct)
+            ? await FetchAllAddressesAsync(http, addressLimit, expectedAddresses, nameCatalog, ct)
             : null;
         var plzStats = new PlzFillStats();
 
@@ -154,7 +158,7 @@ public partial class InspirePropertyImporter(
             else
             {
                 var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
-                    doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
+                    doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt, nameCatalog), ct);
                 if (addresses.MemberCount >= addressLimit)
                 {
                     foreach (var child in Split(tile))
@@ -199,6 +203,8 @@ public partial class InspirePropertyImporter(
         LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount);
         if (postcodes is not null)
             LogPlzSummary(logger, Source, plzStats.Filled, plzStats.Missing, plzStats.Agreeing, plzStats.Official);
+        if (nameCatalog is not null)
+            LogNameRepairs(logger, Source, nameCatalog.Repaired, nameCatalog.Unrepairable);
 
         if (completeness < options.MinCompleteness)
             throw new InspireImportException(FormattableString.Invariant(
@@ -289,7 +295,7 @@ public partial class InspirePropertyImporter(
     /// requests and adjacent pages don't overlap — verified for Hamburg before enabling it there.
     /// </summary>
     private async Task<AddressSpatialIndex> FetchAllAddressesAsync(
-        HttpClient http, int pageSize, long expected, CancellationToken ct)
+        HttpClient http, int pageSize, long expected, NameCatalog? nameCatalog, CancellationToken ct)
     {
         var all = new List<AddressFeature>();
         // A server that silently ignores startIndex would hand out its first page forever.
@@ -299,7 +305,7 @@ public partial class InspirePropertyImporter(
             var filter = FormattableString.Invariant($"&startIndex={startIndex}");
             var what = FormattableString.Invariant($"startIndex={startIndex}");
             var page = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, filter, what, pageSize,
-                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
+                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt, nameCatalog), ct);
             all.AddRange(page.Features);
 
             if (all.Count > limit)
@@ -549,6 +555,9 @@ public partial class InspirePropertyImporter(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: paged {Fetched} of {Expected} addresses with startIndex, before joining them to parcels")]
     private static partial void LogPagedAddresses(ILogger logger, string source, int fetched, long expected);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: repaired {Repaired} damaged names from the catalogue; {Unrepairable} kept as published")]
+    private static partial void LogNameRepairs(ILogger logger, string source, int repaired, int unrepairable);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: Fetching {Tiles} tiles, up to {ParcelLimit} parcels / {AddressLimit} addresses per request")]
     private static partial void LogFetchingTiles(ILogger logger, string source, int tiles, int parcelLimit, int addressLimit);

@@ -53,7 +53,8 @@ public sealed class InspirePropertyImporterTests
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
-        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas, loggerFactory);
+        return new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas,
+            loggerFactory: loggerFactory);
     }
 
     /// <summary>
