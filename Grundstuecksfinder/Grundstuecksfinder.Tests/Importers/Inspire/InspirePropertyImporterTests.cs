@@ -830,4 +830,16 @@ public sealed class InspirePropertyImporterTests
         (await fetch.Should().ThrowAsync<InspireImportException>())
             .WithMessage("*is offset ignored?*");
     }
+
+    [Fact]
+    public async Task DiscoverAsync_OgcApiAddressesConfigured_ReadsHitsFromTheOgcApiEndpoint()
+    {
+        var server = GridServer(2); // 4 parcels, 4 addresses
+
+        var candidates = await Importer(server, Options(o => o.UseOgcApiAddresses = true))
+            .DiscoverAsync(TestContext.Current.CancellationToken);
+
+        candidates.Should().ContainSingle().Which.VersionTimestamp.Should().StartWith("4:4:");
+        server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
+    }
 }
