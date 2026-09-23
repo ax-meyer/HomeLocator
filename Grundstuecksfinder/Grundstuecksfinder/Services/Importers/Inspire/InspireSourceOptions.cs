@@ -88,6 +88,12 @@ public partial class InspireSourceOptions
     public double MinPostcodeFillRatio { get; set; } = 0.95;
 
     /// <summary>
+    /// For Hessen, whose address export replaced every non-ASCII character with U+FFFD: where to
+    /// look up the intact spellings (see <see cref="NameCatalogLoader"/>). Leave unset elsewhere.
+    /// </summary>
+    public NameCatalogOptions NameCatalog { get; set; } = new();
+
+    /// <summary>
     /// Limit for one WFS request including reading and parsing the whole response. Covers what
     /// HttpClient.Timeout doesn't when streaming: a server stalling mid-body.
     /// </summary>

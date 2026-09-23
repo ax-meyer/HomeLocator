@@ -9,6 +9,15 @@ public class GeocodingOptions
     /// container in production ("Geocoding__NominatimBaseUrl" in docker-compose.yml).
     /// </summary>
     public string NominatimBaseUrl { get; set; } = "https://nominatim.openstreetmap.org/";
+
+    /// <summary>
+    /// Guess the letters Hessen's WFS replaced with U+FFFD and keep the first spelling Nominatim
+    /// confirms. Costs up to <see cref="MaxRepairCandidates"/> requests per address, so only
+    /// enable it against a self-hosted Nominatim — the public one allows 1 request/s.
+    /// </summary>
+    public bool RepairCorruptedStreets { get; set; }
+
+    public int MaxRepairCandidates { get; set; } = 16;
 }
 
 public static class GeocodingServiceCollectionExtensions

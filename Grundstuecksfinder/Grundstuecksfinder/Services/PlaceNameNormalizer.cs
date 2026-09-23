@@ -39,6 +39,33 @@ public static partial class PlaceNameNormalizer
         return trimmed.Contains('\uFFFD') ? CorruptedStrasse().Replace(trimmed, "${s}traße") : trimmed;
     }
 
+    /// <summary>
+    /// Plausible original spellings of a street whose non-ASCII letters were replaced by U+FFFD,
+    /// most likely first. At a word start only capital umlauts fit; after a vowel ß is most
+    /// likely ("Gie\uFFFDen"), after a consonant a lowercase umlaut ("M\uFFFDhlgraben").
+    /// Multiple corrupted letters yield every combination.
+    /// </summary>
+    public static IEnumerable<string> CandidateSpellings(string street)
+    {
+        IEnumerable<string> results = [""];
+        for (var i = 0; i < street.Length; i++)
+        {
+            var c = street[i];
+            if (c != '\uFFFD')
+            {
+                results = results.Select(r => r + c);
+                continue;
+            }
+
+            var prev = i > 0 ? street[i - 1] : ' ';
+            var options = !char.IsLetter(prev) ? "ÄÖÜ"
+                : "aeiouAEIOU".Contains(prev) ? "ßüäöé"
+                : "üäöéß";
+            results = results.SelectMany(r => options.Select(o => r + o));
+        }
+        return results;
+    }
+
     [GeneratedRegex(@"\s*\[[^\]]*\]\s*$")]
     private static partial Regex BilingualSuffix();
 
