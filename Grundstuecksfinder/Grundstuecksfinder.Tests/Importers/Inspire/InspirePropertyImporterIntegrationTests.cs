@@ -42,6 +42,7 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         MaxAttempts = 2,
         RetryBaseDelaySeconds = 0,
         MaxRetryDelaySeconds = 0,
+        MinRequestIntervalSeconds = 0,
     };
 
     private static FakeWfsServer TwoParcelServer()
@@ -96,6 +97,35 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         log.FileTimestamp.Should().StartWith("2:2:", "the version is parcel hits, address hits and the month");
         log.RecordCount.Should().Be(2);
         log.CompletedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CheckAndImportAsync_TileSkipped_CompletesAndRecordsItOnTheImportLog()
+    {
+        // Four tiles, one parcel each; the address service is permanently broken for one of them.
+        // The import keeps the other three rather than discarding the run, and says so on the log.
+        var server = TwoParcelServer();
+        server.Parcels.Add(new FakeParcel("P3", 60, 0, 70, 10, 500));
+        server.Addresses.Add(new FakeAddress("A3", 65, 5, "Waldweg", "7"));
+        server.Interceptor = (uri, _) => uri.ToString().StartsWith(FakeWfsServer.AddressUrl, StringComparison.Ordinal)
+                                         && uri.Query.Contains("bbox=50,0", StringComparison.Ordinal)
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : null;
+        void TolerantTiles(InspireSourceOptions o)
+        {
+            o.TileSizeMeters = 50;
+            o.MinCompleteness = 0.5; // 2 of 3 addresses; the tolerance itself is tested elsewhere
+        }
+
+        await BuildOrchestrator(server, TolerantTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
+
+        await using var context = fixture.CreateContext();
+        (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
+            .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße"], "the broken tile's address is missing, the rest is imported");
+        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        log.CompletedAt.Should().NotBeNull("a tolerated hole is still a completed import");
+        log.LastError.Should().BeNull();
+        log.SkippedTiles.Should().Be(1, "so the import health check can report the hole");
     }
 
     [Fact]

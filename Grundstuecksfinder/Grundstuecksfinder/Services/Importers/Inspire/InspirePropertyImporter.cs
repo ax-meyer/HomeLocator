@@ -31,9 +31,16 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// and, if that request comes back full, split into four smaller tiles.
 /// </para>
 /// <para>
-/// Any failure — a request still failing after retries, an error document instead of features,
-/// a response in the wrong CRS, too few addresses overall, too many without a parcel — throws,
-/// so the writer never swaps in partial data and the source's previous rows stay.
+/// A tile whose requests still fail after every retry is logged and skipped rather than losing
+/// the whole (hours-long) run — the completeness check below is the safety net, and one tile of
+/// thousands is far inside it. Past <see cref="InspireSourceOptions.MaxFailedTiles"/> skipped
+/// tiles the import fails after all, so a server that is broken everywhere can't quietly import
+/// half a state.
+/// </para>
+/// <para>
+/// Every other failure — an error document instead of features, a response in the wrong CRS, a
+/// tile still full at the minimum size, too few addresses overall, too many without a parcel —
+/// throws, so the writer never swaps in partial data and the source's previous rows stay.
 /// </para>
 /// </remarks>
 public partial class InspirePropertyImporter(
@@ -61,6 +68,12 @@ public partial class InspirePropertyImporter(
     private ResiliencePipeline? _pipeline;
 
     public string Source => options.Source;
+
+    /// <summary>
+    /// Tiles the last <see cref="FetchAsync"/> gave up on. Written once its enumeration has run
+    /// to the end, so the orchestrator can record a tolerated hole on the ImportLog.
+    /// </summary>
+    public int SkippedTiles { get; private set; }
 
     public async Task<IReadOnlyList<ImportCandidate>> DiscoverAsync(CancellationToken ct)
     {
@@ -127,6 +140,8 @@ public partial class InspirePropertyImporter(
         long addressCount = 0;
         long unmatchedCount = 0;
         var processedTiles = 0;
+        var failedTiles = new FailedTileBudget(logger, Source, options.MaxFailedTiles);
+        SkippedTiles = 0;
         while (pending.TryPop(out var item))
         {
             ct.ThrowIfCancellationRequested();
@@ -137,8 +152,18 @@ public partial class InspirePropertyImporter(
             var parcels = item.Parcels;
             if (parcels is null)
             {
-                var parcelPage = await FetchPageAsync(http, options.ParcelWfsUrl, ParcelType, tile, parcelLimit,
-                    WfsGmlParser.ParseCadastralParcels, ct);
+                WfsPage<ParcelFeature> parcelPage;
+                // try/catch around the await only: an iterator may not yield inside one.
+                try
+                {
+                    parcelPage = await FetchPageAsync(http, options.ParcelWfsUrl, ParcelType, tile, parcelLimit,
+                        WfsGmlParser.ParseCadastralParcels, ct);
+                }
+                catch (Exception ex) when (IsSkippableTileFailure(ex, ct))
+                {
+                    failedTiles.Record(tile, ParcelType, ex);
+                    continue;
+                }
                 if (parcelPage.MemberCount >= parcelLimit)
                 {
                     foreach (var child in Split(tile))
@@ -157,8 +182,17 @@ public partial class InspirePropertyImporter(
             }
             else
             {
-                var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
-                    doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt, nameCatalog), ct);
+                WfsPage<AddressFeature> addresses;
+                try
+                {
+                    addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
+                        doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt, nameCatalog), ct);
+                }
+                catch (Exception ex) when (IsSkippableTileFailure(ex, ct))
+                {
+                    failedTiles.Record(tile, AddressType, ex);
+                    continue;
+                }
                 if (addresses.MemberCount >= addressLimit)
                 {
                     foreach (var child in Split(tile))
@@ -199,8 +233,9 @@ public partial class InspirePropertyImporter(
             }
         }
 
+        SkippedTiles = failedTiles.Count;
         var completeness = expectedAddresses == 0 ? 1 : (double)addressCount / expectedAddresses;
-        LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount);
+        LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount, failedTiles.Count);
         if (postcodes is not null)
             LogPlzSummary(logger, Source, plzStats.Filled, plzStats.Missing, plzStats.Agreeing, plzStats.Official);
         if (nameCatalog is not null)
@@ -227,6 +262,35 @@ public partial class InspirePropertyImporter(
 
         var b = options.BoundingBox;
         return await postcodeAreas.LoadAsync(options.CrsEpsgCode!.Value, new Envelope(b.MinX, b.MaxX, b.MinY, b.MaxY), ct);
+    }
+
+    /// <summary>
+    /// Whether a tile's failure may be skipped rather than fail the import: the transient errors
+    /// whose retries are by now spent. A rejection by the circuit breaker is deliberately not one
+    /// — it means the service as a whole is failing, which must stop the import at once instead
+    /// of burning through the tile budget. Neither is a cancelled import, nor a check on the data
+    /// itself (wrong CRS, a tile still full at the minimum size), which no retry would fix.
+    /// </summary>
+    private static bool IsSkippableTileFailure(Exception ex, CancellationToken ct) =>
+        !ct.IsCancellationRequested && IsTransient(ex);
+
+    /// <summary>
+    /// Counts the tiles given up on and enforces <see cref="InspireSourceOptions.MaxFailedTiles"/>:
+    /// one permanently broken tile must not throw away a run's hours of fetched data, while a
+    /// service failing all over must not pass as an import.
+    /// </summary>
+    private sealed class FailedTileBudget(ILogger logger, string source, int max)
+    {
+        public int Count { get; private set; }
+
+        public void Record(Tile tile, string typeName, Exception failure)
+        {
+            Count++;
+            LogTileSkipped(logger, failure, source, typeName, tile.Bbox, Count, max);
+            if (Count > max)
+                throw new InspireImportException(FormattableString.Invariant(
+                    $"{source}: gave up on {Count} tiles (maximum {max}); keeping the previous data."), failure);
+        }
     }
 
     /// <summary>Fills missing PLZ from the postcode areas and counts how that went.</summary>
@@ -401,8 +465,9 @@ public partial class InspirePropertyImporter(
         }, typeName, "hits", ct);
     }
 
-    private static async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
+    private async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
     {
+        await ThrottleAsync(ct);
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -451,6 +516,30 @@ public partial class InspirePropertyImporter(
         {
             ResilienceContextPool.Shared.Return(context);
         }
+    }
+
+    /// <summary>
+    /// Earliest instant the next request may go out. One source issues its requests strictly one
+    /// at a time (the tile loop awaits each), so a single instant is enough and needs no lock.
+    /// </summary>
+    private DateTimeOffset _nextRequestAt = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Holds the source to at most one request per
+    /// <see cref="InspireSourceOptions.MinRequestIntervalSeconds"/>. A whole state is tens of
+    /// thousands of requests against one public download service, and nothing else in the fetch
+    /// paces them: without this the loop runs as fast as the server answers. Retries are paced
+    /// too, since every attempt goes through here.
+    /// </summary>
+    private async Task ThrottleAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(options.MinRequestIntervalSeconds);
+        if (interval <= TimeSpan.Zero) return;
+
+        var wait = _nextRequestAt - _time.GetUtcNow();
+        if (wait > TimeSpan.Zero)
+            await Task.Delay(wait, _time, ct);
+        _nextRequestAt = _time.GetUtcNow() + interval;
     }
 
     private static readonly ResiliencePropertyKey<string> WhatKey = new("what");
@@ -568,6 +657,9 @@ public partial class InspirePropertyImporter(
     [LoggerMessage(Level = LogLevel.Debug, Message = "{Source}: tile {TileBbox} is full, splitting it into four")]
     private static partial void LogSplitTile(ILogger logger, string source, string tileBbox);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: giving up on {What} for tile {TileBbox} and skipping it ({Failed} of at most {MaxFailed} tiles skipped)")]
+    private static partial void LogTileSkipped(ILogger logger, Exception exception, string source, string what, string tileBbox, int failed, int maxFailed);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: {What} for {Where} failed (attempt {Attempt} of {MaxAttempts}), retrying in {Delay}")]
     private static partial void LogRetrying(ILogger logger, Exception exception, string source, string what, string where, int attempt, int maxAttempts, TimeSpan delay);
 
@@ -580,8 +672,8 @@ public partial class InspirePropertyImporter(
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't read the page-size limit from {Url}'s capabilities; using the configured PageSize")]
     private static partial void LogCapabilitiesFailed(ILogger logger, Exception exception, string source, string url);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: fetched {Fetched} of {Expected} addresses ({Completeness:P1}); {Unmatched} had no containing parcel")]
-    private static partial void LogFetchSummary(ILogger logger, string source, long fetched, long expected, double completeness, long unmatched);
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: fetched {Fetched} of {Expected} addresses ({Completeness:P1}); {Unmatched} had no containing parcel, {FailedTiles} tiles were skipped after repeated failures")]
+    private static partial void LogFetchSummary(ILogger logger, string source, long fetched, long expected, double completeness, long unmatched, int failedTiles);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: filled the PLZ of {Filled} of {Missing} addresses without one from postcode areas; the areas agree with {Agreeing} of {Official} PLZ the source publishes")]
     private static partial void LogPlzSummary(ILogger logger, string source, long filled, long missing, long agreeing, long official);
@@ -591,7 +683,8 @@ public partial class InspirePropertyImporter(
 /// The fetched data is incomplete or inconsistent (wrong CRS, too few addresses, a tile that
 /// can't be fetched completely). Not retried; the import fails and the previous data stays.
 /// </summary>
-public sealed class InspireImportException(string message) : Exception(message);
+public sealed class InspireImportException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
 
 /// <summary>A WFS request answered with a non-success status, and the server's Retry-After if any.</summary>
 public sealed class WfsHttpException(HttpStatusCode statusCode, TimeSpan? retryAfter, string url)

@@ -18,6 +18,9 @@ var builder = WebApplication.CreateBuilder(args);
 var enableDevSeeding = builder.Configuration.GetValue<bool>("EnableDevSeeding");
 
 builder.Logging.ClearProviders();
+// The console sink is configured here and not in "Serilog:WriteTo" because it needs the
+// invariant culture: the container runs with LANG=de_DE.UTF-8 for the page, and log lines must
+// stay machine-readable. Configuring it in both places wrote every line to the console twice.
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)
@@ -59,15 +62,12 @@ builder.Services.AddSingleton(SupportedStates.FromSources(
         .Concat(nrwEnabled ? [NrwPropertyImporter.SourceId] : [])));
 // Each request (headers, body and parsing) is bounded by the source's RequestTimeoutSeconds
 // instead: HttpClient.Timeout stops counting once the headers arrive.
-builder.Services.AddHttpClient(InspirePropertyImporter.HttpClientName, client =>
-    client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddDownloadClient(InspirePropertyImporter.HttpClientName);
 // Same for NRW's ~1 GB ZIP: bounded by NrwImporterOptions.DownloadTimeoutSeconds per attempt.
-builder.Services.AddHttpClient(NrwPropertyImporter.HttpClientName, client =>
-    client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddDownloadClient(NrwPropertyImporter.HttpClientName);
 // Postcode areas for sources without PLZ; the download is bounded by DownloadTimeoutSeconds.
 builder.Services.AddSingleton(builder.Configuration.GetSection("Import:PostcodeAreas").Get<PostcodeAreaOptions>() ?? new PostcodeAreaOptions());
-builder.Services.AddHttpClient(PostcodeAreaProvider.HttpClientName, client =>
-    client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddDownloadClient(PostcodeAreaProvider.HttpClientName);
 builder.Services.AddSingleton<IPostcodeAreaProvider, PostcodeAreaProvider>();
 // Intact name spellings for sources whose own export lost them (Hessen); uses the Inspire client.
 builder.Services.AddSingleton<NameCatalogLoader>();

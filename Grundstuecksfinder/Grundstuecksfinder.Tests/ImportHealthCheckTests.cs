@@ -24,10 +24,11 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
 
-    private static ImportLog Log(string source, string version, long importedAt, string? error = null) => new()
+    private static ImportLog Log(string source, string version, long importedAt, string? error = null, int skippedTiles = 0) => new()
     {
         Source = source, DatasetName = "ds", FileName = "f", FileTimestamp = version,
         ImportedAt = importedAt, LastError = error, CompletedAt = error is null ? importedAt : null,
+        SkippedTiles = skippedTiles,
     };
 
     private async Task<HealthCheckResult> CheckAsync(DisabledSources? disabled = null)
@@ -56,6 +57,37 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
         await SeedAsync(Log("he", "v1", 1, "boom"), Log("he", "v2", 2));
 
         (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task LatestImportSkippedTiles_IsDegradedAlthoughItSucceeded()
+    {
+        // The import is complete enough to serve, but nothing retries those tiles before the
+        // source's version changes, so the hole must not be invisible.
+        await SeedAsync(Log("bw", "v1", 1, skippedTiles: 3), Log("sn", "v1", 1));
+
+        var result = await CheckAsync();
+
+        result.Status.Should().Be(HealthStatus.Degraded);
+        result.Description.Should().Contain("bw: 3").And.NotContain("sn");
+    }
+
+    [Fact]
+    public async Task SkippedTilesFollowedByACleanImport_IsHealthy()
+    {
+        await SeedAsync(Log("bw", "v1", 1, skippedTiles: 3), Log("bw", "v2", 2));
+
+        (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task FailureAndSkippedTiles_AreBothReported()
+    {
+        await SeedAsync(Log("he", "v1", 1, "boom"), Log("bw", "v1", 1, skippedTiles: 2));
+
+        var result = await CheckAsync();
+
+        result.Description.Should().Contain("he: boom").And.Contain("bw: 2");
     }
 
     [Fact]

@@ -24,4 +24,12 @@ public class ImportLog
 
     /// <summary>Why the latest attempt of this version failed; null while running or once completed.</summary>
     public string? LastError { get; set; }
+
+    /// <summary>
+    /// How many parts of the source this import gave up on and imported without (see
+    /// <see cref="Services.Importers.IPropertyImporter.SkippedTiles"/>). Non-zero means the data
+    /// is complete enough to serve but has a known hole, which the import health check reports
+    /// until a later run fills it.
+    /// </summary>
+    public int SkippedTiles { get; set; }
 }
