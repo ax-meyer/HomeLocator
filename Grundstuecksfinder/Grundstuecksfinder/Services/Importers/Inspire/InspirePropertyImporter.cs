@@ -109,6 +109,9 @@ public partial class InspirePropertyImporter(
         var addressLimit = await GetPageLimitAsync(http, options.AddressWfsUrl, ct);
         // Loaded before the (long) fetch, so a missing area file fails the import right away.
         var postcodes = await LoadPostcodeAreasAsync(ct);
+        var pagedAddresses = options.PageAddressesWithStartIndex
+            ? await FetchAllAddressesAsync(http, addressLimit, expectedAddresses, ct)
+            : null;
         var plzStats = new PlzFillStats();
 
         // A tile may carry its parcels along: when only the address page of a tile was full, its
@@ -142,20 +145,30 @@ public partial class InspirePropertyImporter(
             }
             if (parcels.Count == 0) continue;
 
-            var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
-                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
-            if (addresses.MemberCount >= addressLimit)
+            IReadOnlyList<AddressFeature> tileAddresses;
+            if (pagedAddresses is not null)
             {
-                foreach (var child in Split(tile))
-                    pending.Push((child, parcels.Where(p => child.Intersects(p.Geometry.EnvelopeInternal)).ToList()));
-                continue;
+                // Already in memory, so a tile is never too full for its addresses.
+                tileAddresses = pagedAddresses.Query(new Envelope(tile.MinX, tile.MaxX, tile.MinY, tile.MaxY));
+            }
+            else
+            {
+                var addresses = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, tile, addressLimit,
+                    doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
+                if (addresses.MemberCount >= addressLimit)
+                {
+                    foreach (var child in Split(tile))
+                        pending.Push((child, parcels.Where(p => child.Intersects(p.Geometry.EnvelopeInternal)).ToList()));
+                    continue;
+                }
+                tileAddresses = addresses.Features;
             }
 
             var index = new ParcelSpatialIndex();
             foreach (var parcel in parcels)
                 index.Add(parcel.Geometry, parcel.AreaM2);
 
-            foreach (var address in addresses.Features)
+            foreach (var address in tileAddresses)
             {
                 // The bbox filter includes a tile's edges, so an address exactly on a border
                 // comes back from both neighbours; only the tile owning it (half-open) counts it.
@@ -269,8 +282,47 @@ public partial class InspirePropertyImporter(
         ];
     }
 
-    private async Task<WfsPage<T>> FetchPageAsync<T>(
+    /// <summary>
+    /// Fetches every address in one pass, paging with startIndex, for a service whose bbox filter
+    /// is unusable (Hamburg: its address geometries carry SRID 0, so the server rejects every
+    /// bbox as "mixed SRID geometries"). Paging is only safe where a page is the same across
+    /// requests and adjacent pages don't overlap — verified for Hamburg before enabling it there.
+    /// </summary>
+    private async Task<AddressSpatialIndex> FetchAllAddressesAsync(
+        HttpClient http, int pageSize, long expected, CancellationToken ct)
+    {
+        var all = new List<AddressFeature>();
+        // A server that silently ignores startIndex would hand out its first page forever.
+        var limit = expected + pageSize;
+        for (var startIndex = 0L; ; startIndex += pageSize)
+        {
+            var filter = FormattableString.Invariant($"&startIndex={startIndex}");
+            var what = FormattableString.Invariant($"startIndex={startIndex}");
+            var page = await FetchPageAsync(http, options.AddressWfsUrl, AddressType, filter, what, pageSize,
+                doc => WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt), ct);
+            all.AddRange(page.Features);
+
+            if (all.Count > limit)
+                throw new InspireImportException(FormattableString.Invariant(
+                    $"{Source}: paging the address service passed {all.Count} addresses although it reports {expected}; is startIndex ignored?"));
+            if (page.MemberCount < pageSize) break;
+        }
+
+        LogPagedAddresses(logger, Source, all.Count, expected);
+        return new AddressSpatialIndex(all);
+    }
+
+    private Task<WfsPage<T>> FetchPageAsync<T>(
         HttpClient http, string baseUrl, string typeName, Tile tile, int count,
+        Func<XDocument, WfsPage<T>> parse, CancellationToken ct)
+    {
+        var crs = Uri.EscapeDataString(options.Crs);
+        var filter = FormattableString.Invariant($"&bbox={tile.Bbox},{crs}");
+        return FetchPageAsync(http, baseUrl, typeName, filter, tile.Bbox, count, parse, ct);
+    }
+
+    private async Task<WfsPage<T>> FetchPageAsync<T>(
+        HttpClient http, string baseUrl, string typeName, string filter, string what, int count,
         Func<XDocument, WfsPage<T>> parse, CancellationToken ct)
     {
         var resolveSuffix = typeName == AddressType ? "&resolve=local&resolvedepth=2" : "";
@@ -278,14 +330,14 @@ public partial class InspirePropertyImporter(
         // default differs (e.g. Hessen defaults to EPSG:4258 but supports 25832).
         var crs = Uri.EscapeDataString(options.Crs);
         var url = FormattableString.Invariant(
-            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames={Uri.EscapeDataString(typeName)}&bbox={tile.Bbox},{crs}&srsName={crs}&count={count}{resolveSuffix}");
+            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames={Uri.EscapeDataString(typeName)}{filter}&srsName={crs}&count={count}{resolveSuffix}");
 
         var page = await WithRetryAsync(async token =>
         {
             var doc = await GetXmlAsync(http, url, token);
             EnsureCompleteFeatureCollection(doc, url);
             return parse(doc);
-        }, typeName, tile.Bbox, ct);
+        }, typeName, what, ct);
 
         // Unrecognised srsNames count as foreign too: an unchecked CRS could silently misjoin.
         var expectedEpsg = options.CrsEpsgCode;
@@ -494,6 +546,9 @@ public partial class InspirePropertyImporter(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source} reported zero parcels or addresses, skipping")]
     private static partial void LogNoFeatures(ILogger logger, string source);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: paged {Fetched} of {Expected} addresses with startIndex, before joining them to parcels")]
+    private static partial void LogPagedAddresses(ILogger logger, string source, int fetched, long expected);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: Fetching {Tiles} tiles, up to {ParcelLimit} parcels / {AddressLimit} addresses per request")]
     private static partial void LogFetchingTiles(ILogger logger, string source, int tiles, int parcelLimit, int addressLimit);
