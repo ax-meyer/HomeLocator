@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Grundstuecksfinder.Infrastructure;
 
 namespace Grundstuecksfinder.Services;
 
@@ -31,7 +32,7 @@ public static class GeocodingServiceCollectionExtensions
         services.AddHttpClient("Nominatim", (sp, client) =>
         {
             client.BaseAddress = new Uri(sp.GetRequiredService<IOptions<GeocodingOptions>>().Value.NominatimBaseUrl);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("Grundstuecksfinder/1.0 (grundstuecksfinder-impressum@meyerweb.eu)");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(OutboundHttp.UserAgent);
         });
 
         services.AddScoped<GeocodingService>();

@@ -82,6 +82,7 @@ public partial class ImportOrchestrator(
         importLog.ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         importLog.RecordCount = 0;
         importLog.LastError = null;
+        importLog.SkippedTiles = 0;
         await context.SaveChangesAsync(ct);
 
         try
@@ -90,6 +91,10 @@ public partial class ImportOrchestrator(
 
             // Marks the ImportLog completed in the same transaction that swaps the rows in.
             var count = await bulkWriter.WriteAsync(importer.Source, importer.FetchAsync(candidate, ct), importLog.Id, ct);
+            // Only known once the stream has been consumed, and the writer marks the log complete
+            // in its own transaction, so this is a follow-up update of that one column.
+            importLog.SkippedTiles = importer.SkippedTiles;
+            await context.SaveChangesAsync(ct);
             LogImportComplete(logger, importer.Source, count);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)

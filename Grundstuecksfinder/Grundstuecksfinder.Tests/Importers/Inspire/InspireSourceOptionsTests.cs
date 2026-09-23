@@ -51,11 +51,12 @@ public sealed class InspireSourceOptionsTests
         broken.BoundingBox = new InspireBoundingBox { MinX = 10, MaxX = 0, MinY = 0, MaxY = 10 };
         broken.TileSizeMeters = 0;
         broken.MaxFailedTiles = -1;
+        broken.MinRequestIntervalSeconds = -1;
         broken.MinCompleteness = 1.5;
         broken.MinPostcodeFillRatio = -0.1;
 
         var errors = InspireSourceOptions.Validate([broken], []);
 
-        errors.Should().HaveCount(8);
+        errors.Should().HaveCount(9);
     }
 }

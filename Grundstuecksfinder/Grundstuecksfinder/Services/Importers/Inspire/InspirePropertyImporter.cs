@@ -69,6 +69,12 @@ public partial class InspirePropertyImporter(
 
     public string Source => options.Source;
 
+    /// <summary>
+    /// Tiles the last <see cref="FetchAsync"/> gave up on. Written once its enumeration has run
+    /// to the end, so the orchestrator can record a tolerated hole on the ImportLog.
+    /// </summary>
+    public int SkippedTiles { get; private set; }
+
     public async Task<IReadOnlyList<ImportCandidate>> DiscoverAsync(CancellationToken ct)
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
@@ -135,6 +141,7 @@ public partial class InspirePropertyImporter(
         long unmatchedCount = 0;
         var processedTiles = 0;
         var failedTiles = new FailedTileBudget(logger, Source, options.MaxFailedTiles);
+        SkippedTiles = 0;
         while (pending.TryPop(out var item))
         {
             ct.ThrowIfCancellationRequested();
@@ -226,6 +233,7 @@ public partial class InspirePropertyImporter(
             }
         }
 
+        SkippedTiles = failedTiles.Count;
         var completeness = expectedAddresses == 0 ? 1 : (double)addressCount / expectedAddresses;
         LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount, failedTiles.Count);
         if (postcodes is not null)
@@ -457,8 +465,9 @@ public partial class InspirePropertyImporter(
         }, typeName, "hits", ct);
     }
 
-    private static async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
+    private async Task<XDocument> GetXmlAsync(HttpClient http, string url, CancellationToken ct)
     {
+        await ThrottleAsync(ct);
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -507,6 +516,30 @@ public partial class InspirePropertyImporter(
         {
             ResilienceContextPool.Shared.Return(context);
         }
+    }
+
+    /// <summary>
+    /// Earliest instant the next request may go out. One source issues its requests strictly one
+    /// at a time (the tile loop awaits each), so a single instant is enough and needs no lock.
+    /// </summary>
+    private DateTimeOffset _nextRequestAt = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Holds the source to at most one request per
+    /// <see cref="InspireSourceOptions.MinRequestIntervalSeconds"/>. A whole state is tens of
+    /// thousands of requests against one public download service, and nothing else in the fetch
+    /// paces them: without this the loop runs as fast as the server answers. Retries are paced
+    /// too, since every attempt goes through here.
+    /// </summary>
+    private async Task ThrottleAsync(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(options.MinRequestIntervalSeconds);
+        if (interval <= TimeSpan.Zero) return;
+
+        var wait = _nextRequestAt - _time.GetUtcNow();
+        if (wait > TimeSpan.Zero)
+            await Task.Delay(wait, _time, ct);
+        _nextRequestAt = _time.GetUtcNow() + interval;
     }
 
     private static readonly ResiliencePropertyKey<string> WhatKey = new("what");

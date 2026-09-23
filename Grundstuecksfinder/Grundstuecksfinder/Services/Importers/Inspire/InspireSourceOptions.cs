@@ -100,6 +100,15 @@ public partial class InspireSourceOptions
     public double RequestTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Shortest gap between two requests to this source, so a full state — thousands of tiles,
+    /// two requests each — stays at a rate a public download service can be expected to absorb.
+    /// Requests are issued one at a time per source anyway, so this is a ceiling on the rate,
+    /// not a queue. 0 disables it. The wait counts towards <see cref="RequestTimeoutSeconds"/>,
+    /// which matters only if the two are set anywhere near each other.
+    /// </summary>
+    public double MinRequestIntervalSeconds { get; set; } = 0.5;
+
+    /// <summary>
     /// Attempts per WFS request (timeouts, 5xx, broken responses) before the request is given up
     /// on. A tile whose requests are given up on is skipped, up to <see cref="MaxFailedTiles"/>.
     /// </summary>
@@ -210,6 +219,8 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: MaxFailedTiles must not be negative.");
             if (!(s.RequestTimeoutSeconds > 0))
                 errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
+            if (s.MinRequestIntervalSeconds < 0)
+                errors.Add($"{name}: MinRequestIntervalSeconds must not be negative.");
             if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)
                 errors.Add($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds.");
             if (s.CircuitFailureRatio is <= 0 or > 1)

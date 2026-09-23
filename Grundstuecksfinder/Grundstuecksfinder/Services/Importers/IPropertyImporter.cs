@@ -19,6 +19,14 @@ public interface IPropertyImporter
 
     /// <summary>Fetches and normalizes one candidate into Property rows, streamed.</summary>
     IAsyncEnumerable<Property> FetchAsync(ImportCandidate candidate, CancellationToken ct);
+
+    /// <summary>
+    /// Parts of the source the last <see cref="FetchAsync"/> tolerated missing rather than
+    /// failing the import — INSPIRE tiles whose requests kept failing. Read after the stream has
+    /// been consumed and recorded on the ImportLog, so a hole shows on /health instead of only
+    /// in the logs. Importers that fetch a source in one piece leave it at 0.
+    /// </summary>
+    int SkippedTiles => 0;
 }
 
 /// <summary>An importable unit of upstream data, as reported by <see cref="IPropertyImporter.DiscoverAsync"/>.</summary>

@@ -42,6 +42,7 @@ public sealed class InspirePropertyImporterTests
             MaxAttempts = 3,
             RetryBaseDelaySeconds = 0,
             MaxRetryDelaySeconds = 0,
+            MinRequestIntervalSeconds = 0,
         };
         tweak?.Invoke(options);
         return options;
@@ -206,6 +207,35 @@ public sealed class InspirePropertyImporterTests
         && uri.Query.Contains(FormattableString.Invariant($"bbox={x},{y},{x + 10},{y + 10},"), StringComparison.Ordinal);
 
     [Fact]
+    public async Task FetchAsync_MinRequestInterval_PacesEveryRequest()
+    {
+        // A whole state is tens of thousands of requests against one public download service;
+        // nothing else in the fetch paces them.
+        var server = GridServer(2);
+        var time = new FakeTimeProvider();
+
+        var (rows, advanced) = await WithVirtualTimeAsync(
+            time, FetchAllAsync(Importer(server, Options(o => o.MinRequestIntervalSeconds = 0.5), time)),
+            TimeSpan.FromMilliseconds(100), TimeSpan.FromMinutes(5));
+
+        rows.Should().HaveCount(4);
+        server.Requests.Should().HaveCountGreaterThan(3);
+        advanced.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(0.5 * (server.Requests.Count - 1)),
+            "every request after the first waits out the interval");
+    }
+
+    [Fact]
+    public async Task FetchAsync_NoMinRequestInterval_DoesNotWait()
+    {
+        var server = GridServer(2);
+        var time = new FakeTimeProvider();
+
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.MinRequestIntervalSeconds = 0), time));
+
+        rows.Should().HaveCount(4, "nothing waits on a clock that is never advanced");
+    }
+
+    [Fact]
     public async Task FetchAsync_OneTileKeepsFailing_SkipsItAndImportsTheRest()
     {
         // The real case this exists for: one BW parcel tile answered 500 for hours while the rest
@@ -226,6 +256,30 @@ public sealed class InspirePropertyImporterTests
             .ContainSingle(m => m.Contains("skipping it", StringComparison.Ordinal))
             .Which.Should().Contain("tile 50,50,60,60").And.Contain("1 of at most 10");
         logger.MessagesAt(LogLevel.Information).Should().ContainMatch("*fetched 99 of 100*1 tiles were skipped*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_TileSkipped_ReportsTheCountForTheImportLog()
+    {
+        var server = GridServer(10);
+        server.Interceptor = (uri, _) => IsTileOf(uri, FakeWfsServer.AddressUrl, 50, 50)
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : null;
+        var importer = Importer(server, Options(o => o.TileSizeMeters = 10));
+
+        await FetchAllAsync(importer);
+
+        importer.SkippedTiles.Should().Be(1, "the orchestrator records this on the ImportLog");
+    }
+
+    [Fact]
+    public async Task FetchAsync_NothingSkipped_ReportsZero()
+    {
+        var importer = Importer(GridServer(2), Options());
+
+        await FetchAllAsync(importer);
+
+        importer.SkippedTiles.Should().Be(0);
     }
 
     [Fact]
