@@ -11,6 +11,7 @@ using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Services.Importers.Scheduling;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Serilog;
 
@@ -43,10 +44,21 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 // its rows (see DisabledSources) without deleting them.
 builder.Services.AddSingleton(TimeProvider.System);
 
+// Downloaded files (NRW's ZIP, Hauskoordinaten files) are written here while they are read and
+// deleted right after.
+var importWorkDirectory = ImportWorkDirectory.Resolve(builder.Configuration[ImportWorkDirectory.ConfigKey]);
+
 var nrwEnabled = builder.Configuration.GetSection("Import:Nrw").Get<NrwImporterOptions>()?.Enabled ?? true;
 builder.Services.Configure<NrwImporterOptions>(builder.Configuration.GetSection("Import:Nrw"));
 if (nrwEnabled)
-    builder.Services.AddScoped<IPropertySource, NrwPropertyImporter>();
+{
+    builder.Services.AddScoped<IPropertySource>(sp => new NrwPropertyImporter(
+        sp.GetRequiredService<ILogger<NrwPropertyImporter>>(),
+        sp.GetRequiredService<IHttpClientFactory>(),
+        sp.GetRequiredService<IOptions<NrwImporterOptions>>(),
+        sp.GetRequiredService<TimeProvider>(),
+        workDirectory: importWorkDirectory));
+}
 
 // One IPropertySource per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
 // adding a state is adding an "Import:Inspire:Sources" entry, no new code. A broken entry

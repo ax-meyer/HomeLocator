@@ -15,14 +15,25 @@ using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Nrw;
 
-public sealed class NrwPropertyImporterTests
+public sealed class NrwPropertyImporterTests : IDisposable
 {
     private const string ManifestUrl = "https://example.invalid/index.json";
     private const string BaseDownloadUrl = "https://example.invalid/";
     private const string ZipFileName = "grundsteuerdaten.zip";
     private const string ZipUrl = BaseDownloadUrl + ZipFileName;
 
-    private static NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800)
+    /// <summary>Per test, so tests running in parallel never share the fixed download name.</summary>
+    private readonly string _workDirectory = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder-test-{Guid.NewGuid():N}");
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_workDirectory))
+            Directory.Delete(_workDirectory, recursive: true);
+    }
+
+    private string DownloadPath => Path.Combine(_workDirectory, NrwPropertyImporter.DownloadFileName);
+
+    private NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(A<string>._)).ReturnsLazily(() => new HttpClient(handler));
@@ -35,7 +46,7 @@ public sealed class NrwPropertyImporterTests
             MaxRetryDelaySeconds = 0,
             DownloadTimeoutSeconds = timeoutSeconds,
         });
-        return new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, factory, options, time);
+        return new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, factory, options, time, _workDirectory);
     }
 
     /// <summary>One CSV row with the 17 columns the NRW column map expects.</summary>
@@ -105,6 +116,36 @@ public sealed class NrwPropertyImporterTests
         var act = () => Importer(handler).ProbeAsync(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidDataException>().WithMessage("*lists no files*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_DownloadsIntoTheWorkDirectoryAndDeletesTheFileAfterwards()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+        var importer = Importer(handler);
+        var probe = await importer.ProbeAsync(TestContext.Current.CancellationToken);
+
+        await foreach (var _ in importer.FetchAsync(probe, new ImportRunContext(1, NrwPropertyImporter.SourceId), TestContext.Current.CancellationToken))
+            File.Exists(DownloadPath).Should().BeTrue("the rows are read from the download in the work directory");
+
+        File.Exists(DownloadPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FetchAsync_LeftoverFromAnInterruptedImport_IsReplaced()
+    {
+        Directory.CreateDirectory(_workDirectory);
+        await File.WriteAllTextAsync(DownloadPath, "half a ZIP from a crashed run", TestContext.Current.CancellationToken);
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+
+        var rows = await FetchAllAsync(Importer(handler));
+
+        rows.Should().ContainSingle().Which.Str.Should().Be("Hauptstraße");
+        File.Exists(DownloadPath).Should().BeFalse();
     }
 
     [Fact]

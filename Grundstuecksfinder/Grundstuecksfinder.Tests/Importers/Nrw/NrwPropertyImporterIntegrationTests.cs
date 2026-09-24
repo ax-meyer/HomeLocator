@@ -16,6 +16,8 @@ namespace Grundstuecksfinder.Tests.Importers.Nrw;
 [Collection("Postgres")]
 public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
+    private readonly string _workDirectory = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder-test-{Guid.NewGuid():N}");
+
     private const string ManifestUrl = "http://fake/manifest.json";
     private const string BaseDownloadUrl = "http://fake/downloads/";
     private const string DatasetName = "grundsteuer_nrw";
@@ -27,7 +29,12 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
     private const string ZipUrl = $"{BaseDownloadUrl}{ZipFileName}";
 
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        if (Directory.Exists(_workDirectory))
+            Directory.Delete(_workDirectory, recursive: true);
+        return ValueTask.CompletedTask;
+    }
 
     private Task RunImportsAsync(FakeHttpMessageHandler handler, CancellationToken ct = default)
     {
@@ -36,7 +43,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
         A.CallTo(() => httpFactory.CreateClient(A<string>._)).Returns(http);
 
         var options = Options.Create(new NrwImporterOptions { ManifestUrl = ManifestUrl, BaseDownloadUrl = BaseDownloadUrl });
-        var importer = new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, httpFactory, options);
+        var importer = new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, httpFactory, options, workDirectory: _workDirectory);
         return fixture.RunImportsAsync([importer], ct: ct);
     }
 

@@ -18,14 +18,23 @@ public partial class NrwPropertyImporter(
     ILogger<NrwPropertyImporter> logger,
     IHttpClientFactory httpClientFactory,
     IOptions<NrwImporterOptions> options,
-    TimeProvider? timeProvider = null) : IPropertySource
+    TimeProvider? timeProvider = null,
+    string? workDirectory = null) : IPropertySource
 {
     public const string SourceId = "nrw";
 
     /// <summary>Named HttpClient for the manifest and the ZIP; per-attempt limits come from the options.</summary>
     public const string HttpClientName = "Nrw";
 
+    /// <summary>
+    /// The download's file name in the work directory. Fixed rather than unique, so a download
+    /// left behind by a crashed run is found and replaced instead of piling up; only one NRW
+    /// import runs at a time (see <see cref="PropertyBulkWriter"/>'s source lock).
+    /// </summary>
+    public const string DownloadFileName = "nrw-grundsteuer.zip";
+
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly string _workDirectory = ImportWorkDirectory.Resolve(workDirectory);
     private ResiliencePipeline? _pipeline;
 
     public string Id => SourceId;
@@ -75,9 +84,15 @@ public partial class NrwPropertyImporter(
         var http = httpClientFactory.CreateClient(HttpClientName);
         var url = $"{options.Value.BaseDownloadUrl.TrimEnd('/')}/{nrwProbe.FileName}";
 
-        // The ZIP can be several GB – download to a temp file first so ZipArchive can seek.
-        // Ensure the host has at least 10 GB of free disk space.
-        var tempFile = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder_{Guid.NewGuid():N}.zip");
+        // The ZIP is about 1 GB – download it to a file first so ZipArchive can seek. The work
+        // directory needs room for it.
+        Directory.CreateDirectory(_workDirectory);
+        var zipPath = Path.Combine(_workDirectory, DownloadFileName);
+        if (File.Exists(zipPath))
+        {
+            LogDeletingLeftover(logger, zipPath);
+            File.Delete(zipPath);
+        }
         try
         {
             LogDownloading(logger, url);
@@ -86,13 +101,13 @@ public partial class NrwPropertyImporter(
             {
                 using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
                 response.EnsureSuccessStatusCode();
-                await using var fs = File.Create(tempFile);
+                await using var fs = File.Create(zipPath);
                 await response.Content.CopyToAsync(fs, token);
             }, ct);
 
             LogDownloadComplete(logger);
 
-            await using var zip = await ZipFile.OpenReadAsync(tempFile, ct);
+            await using var zip = await ZipFile.OpenReadAsync(zipPath, ct);
             foreach (var entry in zip.Entries.Where(e => e.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
             {
                 LogProcessingEntry(logger, entry.Name);
@@ -113,8 +128,8 @@ public partial class NrwPropertyImporter(
         }
         finally
         {
-            if (File.Exists(tempFile))
-                File.Delete(tempFile);
+            if (File.Exists(zipPath))
+                File.Delete(zipPath);
         }
     }
 
@@ -146,6 +161,9 @@ public partial class NrwPropertyImporter(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "nrw: request failed (attempt {Attempt} of {MaxAttempts}), retrying in {Delay}")]
     private static partial void LogRetrying(ILogger logger, Exception exception, int attempt, int maxAttempts, TimeSpan delay);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "nrw: deleting {Path}, left behind by an interrupted import")]
+    private static partial void LogDeletingLeftover(ILogger logger, string path);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Downloading {Url}...")]
     private static partial void LogDownloading(ILogger logger, string url);
