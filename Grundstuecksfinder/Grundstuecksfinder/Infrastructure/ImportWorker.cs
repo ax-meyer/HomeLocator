@@ -4,7 +4,8 @@ namespace Grundstuecksfinder.Infrastructure;
 
 /// <summary>
 /// Runs the <see cref="ImportRunner"/> once at startup — so a fresh database is filled right
-/// away instead of the next night — and then nightly at <see cref="NightlyRunAt"/> UTC.
+/// away instead of the next night; first imports only — and then nightly at
+/// <see cref="NightlyRunAt"/> UTC, which also does the routine re-imports.
 /// </summary>
 public sealed partial class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvider time, ILogger<ImportWorker> logger)
     : BackgroundService
@@ -14,14 +15,14 @@ public sealed partial class ImportWorker(IServiceScopeFactory scopeFactory, Time
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await RunOnceAsync(stoppingToken);
+        await RunOnceAsync(ImportRunKind.Startup, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var delay = TimeUntilNext(time.GetUtcNow(), NightlyRunAt);
             LogNextRunScheduled(logger, delay);
             await Task.Delay(delay, time, stoppingToken);
-            await RunOnceAsync(stoppingToken);
+            await RunOnceAsync(ImportRunKind.Nightly, stoppingToken);
         }
     }
 
@@ -37,14 +38,14 @@ public sealed partial class ImportWorker(IServiceScopeFactory scopeFactory, Time
         return next - utcNow;
     }
 
-    private async Task RunOnceAsync(CancellationToken stoppingToken)
+    private async Task RunOnceAsync(ImportRunKind kind, CancellationToken stoppingToken)
     {
         try
         {
             // A fresh scope per run: the sources and the database context live for one run only.
             using var scope = scopeFactory.CreateScope();
             var runner = scope.ServiceProvider.GetRequiredService<ImportRunner>();
-            await runner.RunAsync(stoppingToken);
+            await runner.RunAsync(kind, stoppingToken);
         }
         // An exception escaping a BackgroundService stops the whole host (the web app with it),
         // so a failed run (the database unreachable, say) is logged and the next one tried

@@ -9,10 +9,11 @@ public static class ImportRunnerExtensions
     /// <summary>
     /// One import run over <paramref name="sources"/> against the fixture's database, wired like
     /// the app does it; the clock drives both the planner and the writer's completion times.
+    /// A nightly run unless <paramref name="kind"/> says otherwise.
     /// </summary>
     public static async Task RunImportsAsync(this PostgresFixture fixture, IEnumerable<IPropertySource> sources,
         TimeProvider? time = null, RefreshOptions? options = null, int writerBatchSize = PropertyBulkWriter.DefaultBatchSize,
-        CancellationToken ct = default)
+        ImportRunKind kind = ImportRunKind.Nightly, CancellationToken ct = default)
     {
         time ??= TimeProvider.System;
         await using var context = fixture.CreateContext();
@@ -24,6 +25,6 @@ public static class ImportRunnerExtensions
             options ?? new RefreshOptions(),
             time,
             NullLogger<ImportRunner>.Instance);
-        await runner.RunAsync(ct);
+        await runner.RunAsync(kind, ct);
     }
 }

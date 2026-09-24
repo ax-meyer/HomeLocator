@@ -35,12 +35,12 @@ public sealed class ImportWorkerTests
         using var worker = new ImportWorker(services.GetRequiredService<IServiceScopeFactory>(), time, logger);
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
-        await WaitUntilAsync(() => FailedRuns(logger) == 1 && logger.MessagesAt(LogLevel.Information).Any());
+        await Eventually.WaitUntilAsync(() => FailedRuns(logger) == 1 && logger.MessagesAt(LogLevel.Information).Any());
         logger.MessagesAt(LogLevel.Information).Should().ContainSingle(m => m.Contains("01:00:00", StringComparison.Ordinal),
             "the startup run is followed by the nightly one at 03:00 UTC");
 
         // Keep nudging the clock: the worker may not have started its delay yet.
-        await WaitUntilAsync(() => FailedRuns(logger) >= 2, () => time.Advance(TimeSpan.FromHours(1)));
+        await Eventually.WaitUntilAsync(() => FailedRuns(logger) >= 2, () => time.Advance(TimeSpan.FromHours(1)));
 
         worker.ExecuteTask!.IsFaulted.Should().BeFalse();
         await worker.StopAsync(TestContext.Current.CancellationToken);
@@ -64,15 +64,5 @@ public sealed class ImportWorkerTests
         services.AddScoped<ImportStateStore>();
         services.AddScoped<ImportRunner>();
         return services.BuildServiceProvider();
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition, Action? nudge = null)
-    {
-        for (var i = 0; i < 200 && !condition(); i++)
-        {
-            nudge?.Invoke();
-            await Task.Delay(50, TestContext.Current.CancellationToken);
-        }
-        condition().Should().BeTrue("the worker should have got there within 10 seconds");
     }
 }

@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using FluentAssertions;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers;
@@ -51,7 +50,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task FirstRun_ImportsEverySourceBackToBack_DespiteTheRoutineCap()
     {
-        var sources = new[] { new StubSource("a", "a1"), new StubSource("b", "b1"), new StubSource("c", "c1") };
+        var sources = new[] { new StubPropertySource("a", "a1"), new StubPropertySource("b", "b1"), new StubPropertySource("c", "c1") };
 
         await RunAsync(sources);
 
@@ -69,8 +68,8 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ReimportingOneSource_DoesNotTouchTheOtherSourcesRows()
     {
-        var a = new StubSource("a", "a1", street: "Alte Straße");
-        var b = new StubSource("b", "b1");
+        var a = new StubPropertySource("a", "a1", street: "Alte Straße");
+        var b = new StubPropertySource("b", "b1");
         await RunAsync(a, b);
 
         a.Fingerprint = "a2";
@@ -86,7 +85,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ExactFingerprintUnchanged_IsNotFetchedAgainButConfirmedCurrent()
     {
-        var source = new StubSource("nrw", "v1");
+        var source = new StubPropertySource("nrw", "v1");
         await RunAsync(source);
 
         AdvanceDays(200);
@@ -103,7 +102,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ApproximateChange_WaitsUntilTheDataIsMinAgeOld()
     {
-        var source = new StubSource("bw", "100:100", FingerprintKind.Approximate);
+        var source = new StubPropertySource("bw", "100:100", FingerprintKind.Approximate);
         await RunAsync(source);
 
         source.Fingerprint = "101:100";
@@ -123,7 +122,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ApproximateUnchanged_IsReimportedAtMaxAge()
     {
-        var source = new StubSource("bw", "100:100", FingerprintKind.Approximate);
+        var source = new StubPropertySource("bw", "100:100", FingerprintKind.Approximate);
         await RunAsync(source);
 
         AdvanceDays(90);
@@ -137,7 +136,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     public async Task DataAge_CountsFromTheStartOfItsImport()
     {
         // A long import completes a day after it started; its data is as old as the start.
-        var source = new StubSource("bw", "1", FingerprintKind.Approximate) { DuringFetch = () => AdvanceDays(1) };
+        var source = new StubPropertySource("bw", "1", FingerprintKind.Approximate) { DuringFetch = () => AdvanceDays(1) };
         await RunAsync(source);
         source.DuringFetch = null;
 
@@ -151,8 +150,8 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task RoutineImports_OnePerRunMostOverdueFirst_TheRestOnLaterRuns()
     {
-        var a = new StubSource("a", "1", FingerprintKind.Approximate) { RefreshPolicy = new(TimeSpan.Zero, TimeSpan.FromDays(10)) };
-        var b = new StubSource("b", "1", FingerprintKind.Approximate) { RefreshPolicy = new(TimeSpan.Zero, TimeSpan.FromDays(20)) };
+        var a = new StubPropertySource("a", "1", FingerprintKind.Approximate) { RefreshPolicy = new(TimeSpan.Zero, TimeSpan.FromDays(10)) };
+        var b = new StubPropertySource("b", "1", FingerprintKind.Approximate) { RefreshPolicy = new(TimeSpan.Zero, TimeSpan.FromDays(20)) };
         await RunAsync(a, b);
 
         AdvanceDays(30); // a is due for 20 days, b for 10
@@ -168,10 +167,29 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StartupRun_OnlyImportsSourcesWithoutData()
+    {
+        // However often the app restarts, routine re-imports stay within the nightly cap.
+        var due = new StubPropertySource("bw", "1", FingerprintKind.Approximate);
+        await RunAsync(due);
+        AdvanceDays(100);
+        var fresh = new StubPropertySource("sh", "1", FingerprintKind.Approximate);
+
+        await fixture.RunImportsAsync([due, fresh], _time, kind: ImportRunKind.Startup, ct: Ct);
+
+        (due.Fetches, fresh.Fetches).Should().Be((1, 1));
+        (await StateAsync("bw")).LastCheckedAt.Should().Be(T0, "it is due, not confirmed current");
+
+        await RunAsync(due, fresh);
+
+        due.Fetches.Should().Be(2, "the nightly run does the routine re-import");
+    }
+
+    [Fact]
     public async Task ProbeFails_TheOtherSourcesStillRunAndTheErrorIsRecorded()
     {
-        var broken = new StubSource("broken", "x") { ProbeFailure = new HttpRequestException("503 from the WFS") };
-        var working = new StubSource("ok", "v1");
+        var broken = new StubPropertySource("broken", "x") { ProbeFailure = new HttpRequestException("503 from the WFS") };
+        var working = new StubPropertySource("ok", "v1");
 
         await RunAsync(broken, working);
 
@@ -188,8 +206,8 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     {
         // HttpClient reports a timeout as TaskCanceledException, an OperationCanceledException.
         // Unless the run itself was cancelled, it must not escape and stop the host.
-        var timingOut = new StubSource("slow", "x") { ProbeFailure = new TaskCanceledException("HttpClient timeout") };
-        var working = new StubSource("ok", "v1");
+        var timingOut = new StubPropertySource("slow", "x") { ProbeFailure = new TaskCanceledException("HttpClient timeout") };
+        var working = new StubPropertySource("ok", "v1");
 
         var act = () => RunAsync(timingOut, working);
 
@@ -200,7 +218,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ProbeFailsAfterASuccess_KeepsTheServedDataAndTheLastFingerprint()
     {
-        var source = new StubSource("sh", "1:1", FingerprintKind.Approximate);
+        var source = new StubPropertySource("sh", "1:1", FingerprintKind.Approximate);
         await RunAsync(source);
 
         source.ProbeFailure = new HttpRequestException("down");
@@ -223,7 +241,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task AnotherInstanceRunning_SkipsTheRunWithoutRecordingAnything()
     {
-        var source = new StubSource("a", "v1");
+        var source = new StubPropertySource("a", "v1");
         await using var otherInstance = await AdvisoryLock.TryAcquireAsync(
             fixture.DataSource, ImportRunner.RunLockScope, ImportRunner.RunLockKey, logger: null, Ct);
 
@@ -238,8 +256,8 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task SourceLockedByAnotherImport_IsNotRecordedAsAFailedRun()
     {
-        var locked = new StubSource("a", "v1");
-        var other = new StubSource("b", "v1");
+        var locked = new StubPropertySource("a", "v1");
+        var other = new StubPropertySource("b", "v1");
         await using (await AdvisoryLock.TryAcquireAsync(fixture.DataSource, PropertyBulkWriter.SourceLockScope, "a", logger: null, Ct))
             await RunAsync(locked, other);
 
@@ -261,7 +279,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
             await context.SaveChangesAsync(Ct);
         }
         var order = new List<string>();
-        StubSource Recording(string id) => new(id, "1", FingerprintKind.Approximate) { DuringFetch = () => order.Add(id) };
+        StubPropertySource Recording(string id) => new(id, "1", FingerprintKind.Approximate) { DuringFetch = () => order.Add(id) };
 
         await RunAsync(Recording("bw"), Recording("sh"), Recording("sn"));
 
@@ -277,7 +295,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var act = () => fixture.RunImportsAsync([new StubSource("a", "v1")], _time, ct: cts.Token);
+        var act = () => fixture.RunImportsAsync([new StubPropertySource("a", "v1")], _time, ct: cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -285,7 +303,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task FetchFailsMidway_KeepsThePreviousRowsAndIsRetriedNextRun()
     {
-        var source = new StubSource("a", "v1", street: "Alt");
+        var source = new StubPropertySource("a", "v1", street: "Alt");
         await RunAsync(source);
 
         source.Fingerprint = "v2";
@@ -316,7 +334,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task SkippedPartsReportedByTheSource_AreRecordedOnTheServedRun()
     {
-        await RunAsync(new StubSource("bw", "v1") { SkippedParts = 2 });
+        await RunAsync(new StubPropertySource("bw", "v1") { SkippedParts = 2 });
 
         (await StateAsync("bw")).ServedRun!.SkippedParts.Should().Be(2);
     }
@@ -324,52 +342,10 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task FetchGetsTheProbeOfTheSameRun()
     {
-        var source = new StubSource("nrw", "file-2026.zip");
+        var source = new StubPropertySource("nrw", "file-2026.zip");
 
         await RunAsync(source);
 
         source.FetchedProbes.Should().ContainSingle().Which.Fingerprint.Should().Be("file-2026.zip");
-    }
-
-    /// <summary>A source whose upstream the test changes between runs.</summary>
-    private sealed class StubSource(string id, string fingerprint, FingerprintKind kind = FingerprintKind.Exact, string street = "Teststraße")
-        : IPropertySource
-    {
-        public string Id => id;
-        public RefreshPolicy RefreshPolicy { get; init; } = RefreshPolicy.Default;
-        public string Fingerprint { get; set; } = fingerprint;
-        public string Street { get; set; } = street;
-        public int RowCount { get; set; } = 1;
-        public int? FailAfter { get; set; }
-        public int SkippedParts { get; init; }
-        public Exception? ProbeFailure { get; set; }
-        public Action? DuringFetch { get; set; }
-        public int Probes { get; private set; }
-        public int Fetches { get; private set; }
-        public List<SourceProbe> FetchedProbes { get; } = [];
-
-        public Task<SourceProbe> ProbeAsync(CancellationToken ct)
-        {
-            Probes++;
-            return ProbeFailure is { } failure
-                ? Task.FromException<SourceProbe>(failure)
-                : Task.FromResult(new SourceProbe(Fingerprint, kind));
-        }
-
-        public async IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
-        {
-            Fetches++;
-            FetchedProbes.Add(probe);
-            DuringFetch?.Invoke();
-            for (var i = 0; i < RowCount; i++)
-            {
-                ct.ThrowIfCancellationRequested();
-                await Task.Yield();
-                if (i == FailAfter)
-                    throw new HttpRequestException("upstream failed midway");
-                yield return new Property { Str = Street, Hnr = $"{i}", Plz = "00000", Gemeinde = "Testgemeinde", FlaecheAmtl = 100, Source = id };
-            }
-            run.AddSkippedParts(SkippedParts);
-        }
     }
 }

@@ -17,10 +17,11 @@ public sealed class RefreshOptions
     public double MaxAgeDays { get; set; } = RefreshPolicy.Default.MaxAge.TotalDays;
 
     /// <summary>
-    /// Re-imports of already served sources per nightly run, most overdue first; the rest wait
-    /// for the next night. Staggers the large states (hours each) instead of running them all
-    /// in one night. Sources without served data are never held back by this. 0 pauses routine
-    /// re-imports.
+    /// Re-imports of already served sources in the nightly run, most overdue first; the rest
+    /// wait for the next night. Staggers the large states (hours each) instead of running them
+    /// all in one night. The startup run makes none (see <see cref="ImportRunKind.Startup"/>),
+    /// so this is a true per-night limit however often the app restarts. Sources without served
+    /// data are never held back by it. 0 pauses routine re-imports.
     /// </summary>
     public int MaxRoutineImportsPerRun { get; set; } = 1;
 

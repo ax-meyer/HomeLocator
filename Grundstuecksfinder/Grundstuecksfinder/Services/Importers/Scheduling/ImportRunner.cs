@@ -5,7 +5,8 @@ namespace Grundstuecksfinder.Services.Importers.Scheduling;
 
 /// <summary>
 /// One import run over every registered <see cref="IPropertySource"/>: probe them all, let
-/// <see cref="RefreshPlanner"/> decide what is due, then import that one source after another
+/// <see cref="RefreshPlanner"/> decide what is due (routine re-imports only in the
+/// <see cref="ImportRunKind.Nightly"/> run), then import that one source after another
 /// through <see cref="PropertyBulkWriter"/>, recording each attempt as an
 /// <see cref="ImportRun"/>. A source whose probe or import fails is logged and recorded, and
 /// the run moves on to the next; only cancellation of the whole run propagates.
@@ -35,7 +36,7 @@ public sealed partial class ImportRunner(
     public const string RunLockScope = "property-import-run";
     public const string RunLockKey = "all-sources";
 
-    public async Task RunAsync(CancellationToken ct)
+    public async Task RunAsync(ImportRunKind kind, CancellationToken ct)
     {
         await using var runLock = await AdvisoryLock.TryAcquireAsync(dataSource, RunLockScope, RunLockKey, logger, ct);
         if (runLock is null)
@@ -59,8 +60,9 @@ public sealed partial class ImportRunner(
             statuses.Add(new SourceStatus(source.Id, source.RefreshPolicy, probe, known?.Served, known?.LastAttemptFailed ?? false));
         }
 
-        var plan = RefreshPlanner.Plan(statuses, time.GetUtcNow(), options.MaxRoutineImportsPerRun);
-        LogPlan(logger, plan.Imports.Count, plan.Deferred.Count, plan.UpToDate.Count, plan.Unprobed.Count);
+        var maxRoutineImports = kind == ImportRunKind.Nightly ? options.MaxRoutineImportsPerRun : 0;
+        var plan = RefreshPlanner.Plan(statuses, time.GetUtcNow(), maxRoutineImports);
+        LogPlan(logger, kind, plan.Imports.Count, plan.Deferred.Count, plan.UpToDate.Count, plan.Unprobed.Count);
         foreach (var deferred in plan.Deferred)
             LogDeferred(logger, deferred.Source, deferred.Reason);
 
@@ -137,10 +139,10 @@ public sealed partial class ImportRunner(
     [LoggerMessage(Level = LogLevel.Error, Message = "{Source}: probe failed; skipping the source this run")]
     private static partial void LogProbeFailed(ILogger logger, Exception exception, string source);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Import plan: {Imports} to import, {Deferred} deferred to a later run, {UpToDate} up to date, {Unprobed} not probed")]
-    private static partial void LogPlan(ILogger logger, int imports, int deferred, int upToDate, int unprobed);
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Kind} import plan: {Imports} to import, {Deferred} deferred to a later run, {UpToDate} up to date, {Unprobed} not probed")]
+    private static partial void LogPlan(ILogger logger, ImportRunKind kind, int imports, int deferred, int upToDate, int unprobed);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: due ({Reason}), but deferred to a later run by the routine import cap")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: due ({Reason}), but deferred to a later nightly run by the routine import cap")]
     private static partial void LogDeferred(ILogger logger, string source, ImportReason reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: importing ({Reason}), fingerprint {Fingerprint}...")]
