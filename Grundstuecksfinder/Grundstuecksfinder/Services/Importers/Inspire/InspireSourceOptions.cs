@@ -206,40 +206,67 @@ public partial class InspireSourceOptions
             if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
                 errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
 
+            // Every bound below is written as "value within [min, max]", which NaN never is:
+            // a plain "< 0" check lets NaN through, and infinity or a huge number of seconds
+            // would only fail at the first request, where TimeSpan.FromSeconds overflows.
             var b = s.BoundingBox;
-            if (!(b.MinX < b.MaxX && b.MinY < b.MaxY))
-                errors.Add($"{name}: BoundingBox must have MinX < MaxX and MinY < MaxY.");
-            if (!(s.MinTileSizeMeters > 0 && s.TileSizeMeters >= s.MinTileSizeMeters))
-                errors.Add($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters.");
-            if (s.PageSize < 1)
-                errors.Add($"{name}: PageSize must be positive.");
-            if (s.MaxAttempts < 1)
-                errors.Add($"{name}: MaxAttempts must be at least 1.");
-            if (s.MaxFailedTiles < 0)
-                errors.Add($"{name}: MaxFailedTiles must not be negative.");
-            if (!(s.RequestTimeoutSeconds > 0))
-                errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
-            if (s.MinRequestIntervalSeconds < 0)
-                errors.Add($"{name}: MinRequestIntervalSeconds must not be negative.");
-            if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)
-                errors.Add($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds.");
-            if (s.CircuitFailureRatio is <= 0 or > 1)
+            if (!(double.IsFinite(b.MinX) && double.IsFinite(b.MinY) && double.IsFinite(b.MaxX) && double.IsFinite(b.MaxY)
+                  && b.MinX < b.MaxX && b.MinY < b.MaxY))
+                errors.Add($"{name}: BoundingBox must have finite MinX < MaxX and MinY < MaxY.");
+            if (!(Within(s.MinTileSizeMeters, double.Epsilon, MaxTileSizeMeters) && Within(s.TileSizeMeters, s.MinTileSizeMeters, MaxTileSizeMeters)))
+                errors.Add(Invariant($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters <= {MaxTileSizeMeters}."));
+            if (s.PageSize is < 1 or > MaxPageSize)
+                errors.Add(Invariant($"{name}: PageSize must be between 1 and {MaxPageSize}."));
+            if (s.MaxAttempts is < 1 or > MaxMaxAttempts)
+                errors.Add(Invariant($"{name}: MaxAttempts must be between 1 and {MaxMaxAttempts}."));
+            if (s.MaxFailedTiles is < 0 or > MaxMaxFailedTiles)
+                errors.Add(Invariant($"{name}: MaxFailedTiles must be between 0 and {MaxMaxFailedTiles}."));
+            if (!Within(s.RequestTimeoutSeconds, double.Epsilon, MaxSeconds))
+                errors.Add(Invariant($"{name}: RequestTimeoutSeconds must be greater than 0 and at most {MaxSeconds}."));
+            if (!Within(s.MinRequestIntervalSeconds, 0, MaxSeconds))
+                errors.Add(Invariant($"{name}: MinRequestIntervalSeconds must be between 0 and {MaxSeconds}."));
+            if (!(Within(s.RetryBaseDelaySeconds, 0, MaxSeconds) && Within(s.MaxRetryDelaySeconds, s.RetryBaseDelaySeconds, MaxSeconds)))
+                errors.Add(Invariant($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds <= {MaxSeconds}."));
+            if (!Within(s.CircuitFailureRatio, double.Epsilon, 1))
                 errors.Add($"{name}: CircuitFailureRatio must be greater than 0 and at most 1.");
             if (s.CircuitMinimumThroughput < 2)
                 errors.Add($"{name}: CircuitMinimumThroughput must be at least 2.");
-            if (s.CircuitSamplingSeconds < 0.5)
-                errors.Add($"{name}: CircuitSamplingSeconds must be at least 0.5.");
-            if (!(s.CircuitBreakSeconds > 0))
-                errors.Add($"{name}: CircuitBreakSeconds must be positive.");
-            if (s.MinCompleteness is < 0 or > 1)
+            if (!Within(s.CircuitSamplingSeconds, 0.5, MaxSeconds))
+                errors.Add(Invariant($"{name}: CircuitSamplingSeconds must be between 0.5 and {MaxSeconds}."));
+            if (!Within(s.CircuitBreakSeconds, 0.5, MaxSeconds))
+                errors.Add(Invariant($"{name}: CircuitBreakSeconds must be between 0.5 and {MaxSeconds}."));
+            if (!Within(s.MinCompleteness, 0, 1))
                 errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
-            if (s.MaxUnmatchedRatio is < 0 or > 1)
+            if (!Within(s.MaxUnmatchedRatio, 0, 1))
                 errors.Add($"{name}: MaxUnmatchedRatio must be between 0 and 1.");
-            if (s.MinPostcodeFillRatio is < 0 or > 1)
+            if (!Within(s.MinPostcodeFillRatio, 0, 1))
                 errors.Add($"{name}: MinPostcodeFillRatio must be between 0 and 1.");
         }
         return errors;
     }
+
+    /// <summary>
+    /// Longest wait or limit any of the seconds options may be set to: a day. Far beyond any
+    /// sensible value, and Polly's own ceiling for retry delays and circuit-breaker durations.
+    /// </summary>
+    public const double MaxSeconds = 86_400;
+
+    /// <summary>Largest tile edge: 1000 km, bigger than any state.</summary>
+    public const double MaxTileSizeMeters = 1_000_000;
+
+    /// <summary>Largest WFS page; servers cap theirs far lower anyway (see CountDefault).</summary>
+    public const int MaxPageSize = 100_000;
+
+    /// <summary>Most attempts per request; the default of 10 already rides out about an hour.</summary>
+    public const int MaxMaxAttempts = 100;
+
+    /// <summary>Most tiles that may be skipped; every one costs a full retry budget.</summary>
+    public const int MaxMaxFailedTiles = 10_000;
+
+    /// <summary>Whether <paramref name="value"/> lies in [min, max]; false for NaN.</summary>
+    private static bool Within(double value, double min, double max) => value >= min && value <= max;
+
+    private static string Invariant(FormattableString text) => FormattableString.Invariant(text);
 
     internal static bool IsHttpUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";

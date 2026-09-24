@@ -62,6 +62,124 @@ public sealed class InspireSourceOptionsTests
     }
 
     [Fact]
+    public void Validate_Defaults_AreValid() =>
+        InspireSourceOptions.Validate([Valid()], []).Should().BeEmpty();
+
+    /// <summary>Sets one option of an otherwise valid source.</summary>
+    private static readonly Dictionary<string, Action<InspireSourceOptions, double>> Setters = new()
+    {
+        ["RequestTimeoutSeconds"] = (o, v) => o.RequestTimeoutSeconds = v,
+        ["MinRequestIntervalSeconds"] = (o, v) => o.MinRequestIntervalSeconds = v,
+        ["RetryBaseDelaySeconds"] = (o, v) => o.RetryBaseDelaySeconds = v,
+        ["MaxRetryDelaySeconds"] = (o, v) => o.MaxRetryDelaySeconds = v,
+        ["CircuitSamplingSeconds"] = (o, v) => o.CircuitSamplingSeconds = v,
+        ["CircuitBreakSeconds"] = (o, v) => o.CircuitBreakSeconds = v,
+        ["CircuitFailureRatio"] = (o, v) => o.CircuitFailureRatio = v,
+        ["MinCompleteness"] = (o, v) => o.MinCompleteness = v,
+        ["MaxUnmatchedRatio"] = (o, v) => o.MaxUnmatchedRatio = v,
+        ["MinPostcodeFillRatio"] = (o, v) => o.MinPostcodeFillRatio = v,
+        ["TileSizeMeters"] = (o, v) => o.TileSizeMeters = v,
+        ["MinTileSizeMeters"] = (o, v) => o.MinTileSizeMeters = v,
+        ["BoundingBox.MaxX"] = (o, v) => o.BoundingBox.MaxX = v,
+    };
+
+    [Theory]
+    // Every seconds option: overflowing TimeSpan.FromSeconds, infinite, NaN, or just past the day.
+    [InlineData("RequestTimeoutSeconds", double.MaxValue)]
+    [InlineData("RequestTimeoutSeconds", double.PositiveInfinity)]
+    [InlineData("RequestTimeoutSeconds", double.NaN)]
+    [InlineData("RequestTimeoutSeconds", 86_400.5)]
+    [InlineData("RequestTimeoutSeconds", 0)]
+    [InlineData("MinRequestIntervalSeconds", double.MaxValue)]
+    [InlineData("MinRequestIntervalSeconds", double.NaN)]
+    [InlineData("MinRequestIntervalSeconds", 86_400.5)]
+    [InlineData("MinRequestIntervalSeconds", -1)]
+    [InlineData("RetryBaseDelaySeconds", double.NaN)]
+    [InlineData("RetryBaseDelaySeconds", -1)]
+    [InlineData("MaxRetryDelaySeconds", double.MaxValue)]
+    [InlineData("MaxRetryDelaySeconds", double.PositiveInfinity)]
+    [InlineData("MaxRetryDelaySeconds", double.NaN)]
+    [InlineData("MaxRetryDelaySeconds", 86_400.5)]
+    [InlineData("MaxRetryDelaySeconds", 5)] // below RetryBaseDelaySeconds' default of 10
+    [InlineData("CircuitSamplingSeconds", double.PositiveInfinity)]
+    [InlineData("CircuitSamplingSeconds", double.NaN)]
+    [InlineData("CircuitSamplingSeconds", 0.4)]
+    [InlineData("CircuitSamplingSeconds", 86_400.5)]
+    [InlineData("CircuitBreakSeconds", double.MaxValue)]
+    [InlineData("CircuitBreakSeconds", double.NaN)]
+    [InlineData("CircuitBreakSeconds", 0.4)] // Polly's minimum break is half a second
+    [InlineData("CircuitBreakSeconds", 86_400.5)]
+    // Ratios: NaN slipped through the old "< 0 or > 1" checks.
+    [InlineData("CircuitFailureRatio", double.NaN)]
+    [InlineData("CircuitFailureRatio", 0)]
+    [InlineData("MinCompleteness", double.NaN)]
+    [InlineData("MaxUnmatchedRatio", double.NaN)]
+    [InlineData("MinPostcodeFillRatio", double.NaN)]
+    // Tiles and the bounding box: an infinite one would never finish tiling.
+    [InlineData("TileSizeMeters", double.PositiveInfinity)]
+    [InlineData("TileSizeMeters", double.NaN)]
+    [InlineData("TileSizeMeters", 1_000_001)]
+    [InlineData("MinTileSizeMeters", double.NaN)]
+    [InlineData("MinTileSizeMeters", 0)]
+    [InlineData("BoundingBox.MaxX", double.PositiveInfinity)]
+    [InlineData("BoundingBox.MaxX", double.NaN)]
+    public void Validate_OptionOutOfRange_IsRejected(string option, double value)
+    {
+        var broken = Valid();
+        Setters[option](broken, value);
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("RequestTimeoutSeconds", 86_400)]
+    [InlineData("MinRequestIntervalSeconds", 0)]
+    [InlineData("MinRequestIntervalSeconds", 86_400)]
+    [InlineData("MaxRetryDelaySeconds", 86_400)]
+    [InlineData("RetryBaseDelaySeconds", 0)]
+    [InlineData("CircuitSamplingSeconds", 0.5)]
+    [InlineData("CircuitSamplingSeconds", 86_400)]
+    [InlineData("CircuitBreakSeconds", 0.5)]
+    [InlineData("CircuitBreakSeconds", 86_400)]
+    [InlineData("CircuitFailureRatio", 1)]
+    [InlineData("TileSizeMeters", 1_000_000)]
+    public void Validate_OptionAtItsBoundary_IsAccepted(string option, double value)
+    {
+        var options = Valid();
+        Setters[option](options, value);
+
+        InspireSourceOptions.Validate([options], []).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0, 10, 10)]      // PageSize too small
+    [InlineData(100_001, 10, 10)]
+    [InlineData(5000, 0, 10)]    // MaxAttempts too small
+    [InlineData(5000, 101, 10)]
+    [InlineData(5000, 10, -1)]   // MaxFailedTiles negative
+    [InlineData(5000, 10, 10_001)]
+    public void Validate_CountOutOfRange_IsRejected(int pageSize, int maxAttempts, int maxFailedTiles)
+    {
+        var broken = Valid();
+        broken.PageSize = pageSize;
+        broken.MaxAttempts = maxAttempts;
+        broken.MaxFailedTiles = maxFailedTiles;
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Validate_CountsAtTheirBoundaries_AreAccepted()
+    {
+        var options = Valid();
+        options.PageSize = InspireSourceOptions.MaxPageSize;
+        options.MaxAttempts = InspireSourceOptions.MaxMaxAttempts;
+        options.MaxFailedTiles = InspireSourceOptions.MaxMaxFailedTiles;
+
+        InspireSourceOptions.Validate([options], []).Should().BeEmpty();
+    }
+
+    [Fact]
     public void Validate_AddressSourceWithoutUrl_IsRejected()
     {
         var broken = Valid();
