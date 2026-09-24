@@ -134,6 +134,21 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DataAge_CountsFromTheStartOfItsImport()
+    {
+        // A long import completes a day after it started; its data is as old as the start.
+        var source = new StubSource("bw", "1", FingerprintKind.Approximate) { DuringFetch = () => AdvanceDays(1) };
+        await RunAsync(source);
+        source.DuringFetch = null;
+
+        AdvanceDays(89); // 90 days after the fetch started, 89 after it completed
+        await RunAsync(source);
+
+        source.Fetches.Should().Be(2);
+        (await RunsAsync("bw")).Last().Reason.Should().Be(ImportReason.MaxAge);
+    }
+
+    [Fact]
     public async Task RoutineImports_OnePerRunMostOverdueFirst_TheRestOnLaterRuns()
     {
         var a = new StubSource("a", "1", FingerprintKind.Approximate) { RefreshPolicy = new(TimeSpan.Zero, TimeSpan.FromDays(10)) };
@@ -277,6 +292,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
         public int? FailAfter { get; set; }
         public int SkippedParts { get; init; }
         public Exception? ProbeFailure { get; set; }
+        public Action? DuringFetch { get; set; }
         public int Fetches { get; private set; }
         public List<SourceProbe> FetchedProbes { get; } = [];
 
@@ -288,6 +304,7 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
         {
             Fetches++;
             FetchedProbes.Add(probe);
+            DuringFetch?.Invoke();
             for (var i = 0; i < RowCount; i++)
             {
                 ct.ThrowIfCancellationRequested();

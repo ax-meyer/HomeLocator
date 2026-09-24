@@ -37,6 +37,20 @@ public sealed class RefreshPlannerTests
     }
 
     [Fact]
+    public void Plan_InitialImportsWhoseLastAttemptFailed_GoAfterTheNeverAttemptedOnes()
+    {
+        // A source that took the process down (say, out of memory) must not keep every other
+        // state from its first import on each restart.
+        var plan = Plan(1,
+            new SourceStatus("bw", Policy, Approximate("1"), Served: null, LastAttemptFailed: true),
+            NeverServed("nrw", Exact("v1")),
+            new SourceStatus("he", Policy, Approximate("1"), Served: null, LastAttemptFailed: true),
+            NeverServed("sh", Approximate("1")));
+
+        plan.Imports.Select(i => i.Source).Should().Equal("nrw", "sh", "bw", "he");
+    }
+
+    [Fact]
     public void Plan_InitialImports_ComeBeforeTheRoutineOne()
     {
         var plan = Plan(1,

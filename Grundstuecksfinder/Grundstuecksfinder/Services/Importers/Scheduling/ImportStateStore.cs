@@ -23,8 +23,8 @@ public sealed class ImportStateStore(AppDbContext db)
     {
         var served = await db.SourceStates
             .Where(s => s.ServedRun != null)
-            .Select(s => new { s.Source, s.ServedRun!.Fingerprint, s.ServedRun.CompletedAt })
-            .ToDictionaryAsync(s => s.Source, s => new ServedImport(s.Fingerprint, s.CompletedAt!.Value), ct);
+            .Select(s => new { s.Source, s.ServedRun!.Fingerprint, s.ServedRun.StartedAt })
+            .ToDictionaryAsync(s => s.Source, s => new ServedImport(s.Fingerprint, s.StartedAt), ct);
         var failed = (await db.LatestRunsIfFailed.Select(r => r.Source).ToListAsync(ct)).ToHashSet();
 
         return served.Keys.Union(failed).ToDictionary(

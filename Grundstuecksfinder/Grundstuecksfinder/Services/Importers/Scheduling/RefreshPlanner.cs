@@ -11,8 +11,13 @@ namespace Grundstuecksfinder.Services.Importers.Scheduling;
 public sealed record SourceStatus(
     string Source, RefreshPolicy Policy, SourceProbe? Probe, ServedImport? Served, bool LastAttemptFailed = false);
 
-/// <summary>The fingerprint and completion time of the import a source's rows came from.</summary>
-public sealed record ServedImport(string Fingerprint, DateTimeOffset CompletedAt);
+/// <summary>The import a source's rows came from.</summary>
+/// <param name="Fingerprint">The upstream version it imported.</param>
+/// <param name="StartedAt">
+/// When its fetch started. The data is as old as that, not as its completion: a multi-hour
+/// import measured from its end would reach MinAge/MaxAge a night late, every time.
+/// </param>
+public sealed record ServedImport(string Fingerprint, DateTimeOffset StartedAt);
 
 /// <summary>One import the plan asks for, and the probe its fetch is to import.</summary>
 public sealed record PlannedImport(string Source, SourceProbe Probe, ImportReason Reason);
@@ -36,7 +41,8 @@ public sealed record RefreshPlan(
 /// <list type="bullet">
 /// <item>A source without served data is always imported, all of them back to back in the same
 /// run: after the database is dropped, the first start imports everything at once rather than
-/// one state per night.</item>
+/// one state per night. Those whose last attempt failed go last, so a source that brings the
+/// process down (say, out of memory) can't keep every other state from its first import.</item>
 /// <item>Otherwise an <see cref="FingerprintKind.Exact"/> source is due iff its fingerprint
 /// changed; an <see cref="FingerprintKind.Approximate"/> one iff it changed and the data is at
 /// least <see cref="RefreshPolicy.MinAge"/> old, or the data reached
@@ -53,7 +59,7 @@ public static class RefreshPlanner
 {
     public static RefreshPlan Plan(IReadOnlyList<SourceStatus> sources, DateTimeOffset now, int maxRoutineImportsPerRun)
     {
-        var initial = new List<PlannedImport>();
+        var initial = new List<(PlannedImport Import, bool Failed)>();
         var routine = new List<(PlannedImport Import, bool Failed, TimeSpan Overdue)>();
         var upToDate = new List<string>();
         var unprobed = new List<string>();
@@ -67,7 +73,7 @@ public static class RefreshPlanner
             }
             if (status.Served is not { } served)
             {
-                initial.Add(new PlannedImport(status.Source, probe, ImportReason.Initial));
+                initial.Add((new PlannedImport(status.Source, probe, ImportReason.Initial), status.LastAttemptFailed));
                 continue;
             }
 
@@ -88,18 +94,21 @@ public static class RefreshPlanner
             .ToList();
         var cap = Math.Clamp(maxRoutineImportsPerRun, 0, ordered.Count);
 
-        return new RefreshPlan([.. initial, .. ordered.Take(cap)], ordered.Skip(cap).ToList(), upToDate, unprobed);
+        // OrderBy is stable: otherwise the sources keep their registration order.
+        var initialOrdered = initial.OrderBy(i => i.Failed).Select(i => i.Import);
+
+        return new RefreshPlan([.. initialOrdered, .. ordered.Take(cap)], ordered.Skip(cap).ToList(), upToDate, unprobed);
     }
 
     /// <summary>
     /// How long the source has been due and why, or null while its served data is current.
-    /// An Exact change counts as due since the served import completed: when the new version
-    /// was published is unknown, only that it came after the version being served.
+    /// An Exact change counts as due since the served import started: when the new version was
+    /// published is unknown, only that it came after the version being served.
     /// </summary>
     private static (ImportReason Reason, TimeSpan Overdue)? Overdue(
         SourceProbe probe, ServedImport served, RefreshPolicy policy, DateTimeOffset now)
     {
-        var age = now - served.CompletedAt;
+        var age = now - served.StartedAt;
         var changed = !string.Equals(probe.Fingerprint, served.Fingerprint, StringComparison.Ordinal);
 
         if (probe.Kind == FingerprintKind.Exact)
