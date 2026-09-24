@@ -104,7 +104,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_CreatesImportLog()
+    public async Task CheckAndImportAsync_ValidData_RecordsACompletedRun()
     {
         var handler = new FakeHttpMessageHandler();
         handler.AddRoute(ManifestUrl, () => new HttpResponseMessage(HttpStatusCode.OK)
@@ -122,33 +122,23 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
         await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        var log = await context.ImportLogs.FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var run = await context.ImportRuns.FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        log.Should().NotBeNull();
-        log!.Source.Should().Be(NrwPropertyImporter.SourceId);
-        log.DatasetName.Should().Be(DatasetName);
-        log.FileName.Should().Be(ZipFileName);
-        log.FileTimestamp.Should().Be(ZipTimestamp);
-        log.RecordCount.Should().BeGreaterThan(0);
+        run.Should().NotBeNull();
+        run!.Source.Should().Be(NrwPropertyImporter.SourceId);
+        run.Fingerprint.Should().Be($"{DatasetName}/{ZipFileName}/{ZipTimestamp}");
+        run.RecordCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
     public async Task CheckAndImportAsync_AlreadyImported_SkipsImport()
     {
-        // Pre-populate the import log with a completed import of the same timestamp
+        // The same version is already being served
         await using (var context = fixture.CreateContext())
         {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            context.ImportLogs.Add(new Grundstuecksfinder.Models.ImportLog
-            {
-                Source = NrwPropertyImporter.SourceId,
-                DatasetName = DatasetName,
-                FileName = ZipFileName,
-                FileTimestamp = ZipTimestamp,
-                ImportedAt = now,
-                RecordCount = 999,
-                CompletedAt = now,
-            });
+            context.SourceStates.Add(ImportSeed.Serving(ImportSeed.Completed(
+                NrwPropertyImporter.SourceId, DateTimeOffset.UtcNow, recordCount: 999,
+                fingerprint: $"{DatasetName}/{ZipFileName}/{ZipTimestamp}")));
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 

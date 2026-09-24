@@ -9,15 +9,16 @@ namespace Grundstuecksfinder.Services.Importers;
 /// Rows stream into the unlogged PropertyStaging table via COPY BINARY in short batches, each its
 /// own transaction, so a multi-hour import never holds a transaction open (which would pin
 /// autovacuum's horizon for the whole database). Only once the importer has yielded every row
-/// without failing are they swapped into Properties, in one short transaction that also marks
-/// the <see cref="ImportLog"/> completed — a failed or cancelled import leaves the source's
-/// previous rows untouched.
+/// without failing are they swapped into Properties, in one short transaction that also
+/// completes the <see cref="ImportRun"/> and makes it the source's served run — a failed or
+/// cancelled import leaves the source's previous rows untouched.
 /// </summary>
 public partial class PropertyBulkWriter(
     NpgsqlDataSource dataSource,
     ILogger<PropertyBulkWriter>? logger = null,
     double minRetainedRatio = PropertyBulkWriter.DefaultMinRetainedRatio,
-    int batchSize = PropertyBulkWriter.DefaultBatchSize)
+    int batchSize = PropertyBulkWriter.DefaultBatchSize,
+    TimeProvider? timeProvider = null)
 {
     public const int DefaultBatchSize = 50_000;
 
@@ -30,8 +31,15 @@ public partial class PropertyBulkWriter(
 
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(5);
 
-    public async Task<long> WriteAsync(string source, IAsyncEnumerable<Property> properties, int importLogId, CancellationToken ct)
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    /// <summary>
+    /// Replaces the run's source's rows with <paramref name="properties"/> and records the run
+    /// as completed and served. Returns the number of rows swapped in.
+    /// </summary>
+    public async Task<long> WriteAsync(ImportRunContext run, IAsyncEnumerable<Property> properties, CancellationToken ct)
     {
+        var source = run.Source;
         // Two processes importing the same source (a deploy overlap, a dev machine pointed at
         // prod) would clear and fill the same staging rows. The session-level lock lives as
         // long as this connection.
@@ -46,7 +54,7 @@ public partial class PropertyBulkWriter(
             try
             {
                 var count = await StageAsync(source, properties, ct);
-                await SwapAsync(source, importLogId, count, ct);
+                await SwapAsync(run, count, ct);
                 return count;
             }
             finally
@@ -111,8 +119,9 @@ public partial class PropertyBulkWriter(
         await writer.CompleteAsync(ct);
     }
 
-    private async Task SwapAsync(string source, int importLogId, long count, CancellationToken ct)
+    private async Task SwapAsync(ImportRunContext run, long count, CancellationToken ct)
     {
+        var source = run.Source;
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
 
@@ -136,27 +145,42 @@ public partial class PropertyBulkWriter(
         }
 
         await using (var insert = new NpgsqlCommand("""
-            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", "ImportLogId")
+            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", "ImportRunId")
             SELECT "Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", $2
             FROM "PropertyStaging" WHERE "Source" = $1
             """, conn, tx))
         {
             insert.CommandTimeout = 0;
             insert.Parameters.AddWithValue(source);
-            insert.Parameters.AddWithValue(importLogId);
+            insert.Parameters.AddWithValue(run.RunId);
             await insert.ExecuteNonQueryAsync(ct);
         }
 
-        // In the same transaction, so swapped data is never logged as a failed import (which
-        // would re-import it the next night) and a logged completion always has its data.
+        // In the same transaction, so swapped data is never recorded as a failed import (which
+        // would re-import it the next night), and a completed, served run always has its data.
+        // The fetch has run to its end, so the parts it skipped are all known by now.
+        var completedAt = _time.GetUtcNow();
         await using (var complete = new NpgsqlCommand("""
-            UPDATE "ImportLogs" SET "RecordCount" = $2, "CompletedAt" = $3, "LastCheckedAt" = $3, "LastError" = NULL WHERE "Id" = $1
+            UPDATE "ImportRuns" SET "RecordCount" = $2, "SkippedParts" = $3, "CompletedAt" = $4 WHERE "Id" = $1
             """, conn, tx))
         {
-            complete.Parameters.AddWithValue(importLogId);
+            complete.Parameters.AddWithValue(run.RunId);
             complete.Parameters.AddWithValue(count);
-            complete.Parameters.AddWithValue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            complete.Parameters.AddWithValue(run.SkippedParts);
+            complete.Parameters.AddWithValue(completedAt);
             await complete.ExecuteNonQueryAsync(ct);
+        }
+
+        // Freshly imported data is current as of its completion.
+        await using (var serve = new NpgsqlCommand("""
+            INSERT INTO "SourceStates" ("Source", "ServedRunId", "LastCheckedAt") VALUES ($1, $2, $3)
+            ON CONFLICT ("Source") DO UPDATE SET "ServedRunId" = excluded."ServedRunId", "LastCheckedAt" = excluded."LastCheckedAt"
+            """, conn, tx))
+        {
+            serve.Parameters.AddWithValue(source);
+            serve.Parameters.AddWithValue(run.RunId);
+            serve.Parameters.AddWithValue(completedAt);
+            await serve.ExecuteNonQueryAsync(ct);
         }
 
         await tx.CommitAsync(ct);

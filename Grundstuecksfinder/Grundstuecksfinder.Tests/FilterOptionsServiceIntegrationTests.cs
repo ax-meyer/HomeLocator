@@ -23,16 +23,19 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
         return await service.GetAsync();
     }
 
-    private async Task AddImportAsync(long completedAt, params (string Plz, string Gemeinde)[] rows)
+    /// <summary>What an import leaves behind: its rows, and its run as the source's served one.</summary>
+    private async Task AddImportAsync(double day, params (string Plz, string Gemeinde)[] rows)
     {
         await using var context = fixture.CreateContext();
-        var log = new ImportLog
-        {
-            Source = "nrw", DatasetName = "ds", FileName = $"{completedAt}.zip", FileTimestamp = $"{completedAt}",
-            ImportedAt = completedAt, RecordCount = rows.Length, CompletedAt = completedAt,
-        };
+        var run = ImportSeed.Completed("nrw", ImportSeed.Day(day), rows.Length);
         context.Properties.AddRange(rows.Select(r =>
-            new Property { Str = "Hauptstraße", Hnr = "1", Plz = r.Plz, Gemeinde = r.Gemeinde, Source = "nrw", ImportLog = log }));
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = r.Plz, Gemeinde = r.Gemeinde, Source = "nrw", ImportRun = run }));
+
+        var state = await context.SourceStates.FindAsync(["nrw"], TestContext.Current.CancellationToken);
+        if (state is null)
+            context.SourceStates.Add(ImportSeed.Serving(run));
+        else
+            state.ServedRun = run;
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
 
@@ -46,8 +49,8 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
         // that the second call didn't query Properties again.
         await using (var context = fixture.CreateContext())
         {
-            var log = context.ImportLogs.Single();
-            context.Properties.Add(new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", Source = "nrw", ImportLogId = log.Id });
+            var run = context.ImportRuns.Single();
+            context.Properties.Add(new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", Source = "nrw", ImportRunId = run.Id });
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 

@@ -75,7 +75,7 @@ public partial class InspirePropertyImporter(
 
     /// <summary>
     /// Tiles the last <see cref="FetchAsync"/> gave up on. Written once its enumeration has run
-    /// to the end, so the orchestrator can record a tolerated hole on the ImportLog.
+    /// to the end, so the orchestrator can record a tolerated hole on the ImportRun.
     /// </summary>
     public int SkippedTiles { get; private set; }
 

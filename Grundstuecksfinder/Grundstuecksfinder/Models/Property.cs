@@ -11,6 +11,6 @@ public class Property
     public string? Gemeinde { get; set; }
     public double? FlaecheAmtl { get; set; }
     public string Source { get; set; } = string.Empty;
-    public int ImportLogId { get; set; }
-    public ImportLog ImportLog { get; set; } = null!;
+    public int ImportRunId { get; set; }
+    public ImportRun ImportRun { get; set; } = null!;
 }

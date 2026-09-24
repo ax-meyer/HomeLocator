@@ -12,15 +12,15 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Grundstuecksfinder.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260809180059_AddSourceDiscriminator")]
-    partial class AddSourceDiscriminator
+    [Migration("20260924060739_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -47,7 +47,7 @@ namespace Grundstuecksfinder.Migrations
                     b.ToTable("DailyTelemetry");
                 });
 
-            modelBuilder.Entity("Grundstuecksfinder.Models.ImportLog", b =>
+            modelBuilder.Entity("Grundstuecksfinder.Models.ImportRun", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -55,34 +55,41 @@ namespace Grundstuecksfinder.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("DatasetName")
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("FailedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Fingerprint")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("FileName")
+                    b.Property<string>("Reason")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<string>("FileTimestamp")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<long>("ImportedAt")
-                        .HasColumnType("bigint");
 
                     b.Property<long>("RecordCount")
                         .HasColumnType("bigint");
+
+                    b.Property<int>("SkippedParts")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("Source", "DatasetName", "FileName", "FileTimestamp")
-                        .IsUnique();
+                    b.HasIndex("Source");
 
-                    b.ToTable("ImportLogs");
+                    b.ToTable("ImportRuns");
                 });
 
             modelBuilder.Entity("Grundstuecksfinder.Models.Property", b =>
@@ -105,7 +112,7 @@ namespace Grundstuecksfinder.Migrations
                     b.Property<string>("HnrZus")
                         .HasColumnType("text");
 
-                    b.Property<int>("ImportLogId")
+                    b.Property<int>("ImportRunId")
                         .HasColumnType("integer");
 
                     b.Property<string>("Ort")
@@ -125,7 +132,7 @@ namespace Grundstuecksfinder.Migrations
 
                     b.HasIndex("Gemeinde");
 
-                    b.HasIndex("ImportLogId");
+                    b.HasIndex("ImportRunId");
 
                     b.HasIndex("Plz");
 
@@ -134,15 +141,52 @@ namespace Grundstuecksfinder.Migrations
                     b.ToTable("Properties");
                 });
 
+            modelBuilder.Entity("Grundstuecksfinder.Models.SourceState", b =>
+                {
+                    b.Property<string>("Source")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("LastCheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastProbeAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastProbeError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LastProbeFingerprint")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ServedRunId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Source");
+
+                    b.HasIndex("ServedRunId");
+
+                    b.ToTable("SourceStates");
+                });
+
             modelBuilder.Entity("Grundstuecksfinder.Models.Property", b =>
                 {
-                    b.HasOne("Grundstuecksfinder.Models.ImportLog", "ImportLog")
+                    b.HasOne("Grundstuecksfinder.Models.ImportRun", "ImportRun")
                         .WithMany()
-                        .HasForeignKey("ImportLogId")
+                        .HasForeignKey("ImportRunId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("ImportLog");
+                    b.Navigation("ImportRun");
+                });
+
+            modelBuilder.Entity("Grundstuecksfinder.Models.SourceState", b =>
+                {
+                    b.HasOne("Grundstuecksfinder.Models.ImportRun", "ServedRun")
+                        .WithMany()
+                        .HasForeignKey("ServedRunId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ServedRun");
                 });
 #pragma warning restore 612, 618
         }

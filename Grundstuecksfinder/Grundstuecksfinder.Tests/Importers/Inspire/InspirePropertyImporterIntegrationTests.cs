@@ -85,18 +85,16 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_CompletesOneImportLogForTheWholeState()
+    public async Task CheckAndImportAsync_ValidData_CompletesOneRunForTheWholeState()
     {
         await BuildOrchestrator(TwoParcelServer()).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
-        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
-        log.Source.Should().Be(Source);
-        log.DatasetName.Should().Be(DatasetName);
-        log.FileName.Should().Be("statewide");
-        log.FileTimestamp.Should().StartWith("2:2:", "the version is parcel hits, address hits and the month");
-        log.RecordCount.Should().Be(2);
-        log.CompletedAt.Should().NotBeNull();
+        var run = (await context.ImportRuns.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        run.Source.Should().Be(Source);
+        run.Fingerprint.Should().StartWith($"{DatasetName}/statewide/2:2:", "the version is parcel hits, address hits and the month");
+        run.RecordCount.Should().Be(2);
+        run.CompletedAt.Should().NotBeNull();
     }
 
     [Fact]
@@ -122,10 +120,10 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         await using var context = fixture.CreateContext();
         (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
             .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße"], "the broken tile's address is missing, the rest is imported");
-        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
-        log.CompletedAt.Should().NotBeNull("a tolerated hole is still a completed import");
-        log.LastError.Should().BeNull();
-        log.SkippedTiles.Should().Be(1, "so the import health check can report the hole");
+        var run = (await context.ImportRuns.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        run.CompletedAt.Should().NotBeNull("a tolerated hole is still a completed import");
+        run.Error.Should().BeNull();
+        run.SkippedParts.Should().Be(1, "so the import health check can report the hole");
     }
 
     [Fact]
@@ -145,15 +143,9 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
     {
         await using (var context = fixture.CreateContext())
         {
-            context.Properties.Add(new Property
-            {
-                Str = "Alte Straße", Hnr = "1", FlaecheAmtl = 1, Source = Source,
-                ImportLog = new ImportLog
-                {
-                    Source = Source, DatasetName = DatasetName, FileName = "statewide", FileTimestamp = "old",
-                    ImportedAt = 1, RecordCount = 1, CompletedAt = 1,
-                },
-            });
+            var old = ImportSeed.Completed(Source, ImportSeed.Epoch, recordCount: 1, fingerprint: "old");
+            context.SourceStates.Add(ImportSeed.Serving(old));
+            context.Properties.Add(new Property { Str = "Alte Straße", Hnr = "1", FlaecheAmtl = 1, Source = Source, ImportRun = old });
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
@@ -173,12 +165,13 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().Equal(["Alte Straße"], "a failed import must not replace the previous data");
-            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp != "old", TestContext.Current.CancellationToken);
+            var failed = await context.ImportRuns.SingleAsync(r => r.Fingerprint != "old", TestContext.Current.CancellationToken);
             failed.CompletedAt.Should().BeNull();
+            failed.FailedAt.Should().NotBeNull();
         }
         await AssertStagingEmptyAsync();
 
-        // Next run: the service is back; the same version is retried, reusing its ImportLog row.
+        // Next run: the service is back; the same version is retried as a new run.
         server.Interceptor = null;
         await BuildOrchestrator(server, TwoTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
@@ -186,8 +179,8 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße", "Waldweg"]);
-            var logs = await context.ImportLogs.Where(l => l.FileTimestamp != "old").ToListAsync(TestContext.Current.CancellationToken);
-            logs.Should().ContainSingle().Which.CompletedAt.Should().NotBeNull();
+            var runs = await context.ImportRuns.Where(r => r.Fingerprint != "old").OrderBy(r => r.Id).ToListAsync(TestContext.Current.CancellationToken);
+            runs.Should().HaveCount(2).And.ContainSingle(r => r.CompletedAt != null);
         }
     }
 

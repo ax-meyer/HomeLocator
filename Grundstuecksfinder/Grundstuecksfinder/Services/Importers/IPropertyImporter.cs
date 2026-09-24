@@ -9,7 +9,7 @@ namespace Grundstuecksfinder.Services.Importers;
 public interface IPropertyImporter
 {
     /// <summary>
-    /// Stable slug for this source, e.g. "nrw". Used as the discriminator on Property/ImportLog
+    /// Stable slug for this source, e.g. "nrw". Used as the discriminator on Property/ImportRun
     /// rows. Must never change once deployed, or existing rows become orphaned.
     /// </summary>
     string Source { get; }
@@ -23,7 +23,7 @@ public interface IPropertyImporter
     /// <summary>
     /// Parts of the source the last <see cref="FetchAsync"/> tolerated missing rather than
     /// failing the import — INSPIRE tiles whose requests kept failing. Read after the stream has
-    /// been consumed and recorded on the ImportLog, so a hole shows on /health instead of only
+    /// been consumed and recorded on the ImportRun, so a hole shows on /health instead of only
     /// in the logs. Importers that fetch a source in one piece leave it at 0.
     /// </summary>
     int SkippedTiles => 0;

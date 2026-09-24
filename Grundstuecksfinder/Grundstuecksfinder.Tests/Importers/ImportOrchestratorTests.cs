@@ -73,17 +73,13 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         var importer = new StubPropertyImporter("a", "ds", "file-a", "2026-01-01", [MakeProperty("a")]);
         await BuildOrchestrator(importer).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
-        ImportLog imported;
-        await using (var context = fixture.CreateContext())
-            imported = await context.ImportLogs.SingleAsync(TestContext.Current.CancellationToken);
-
-        var beforeCheck = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var beforeCheck = DateTimeOffset.UtcNow;
         await BuildOrchestrator(importer).CheckAndImportAsync(TestContext.Current.CancellationToken);
 
         await using var after = fixture.CreateContext();
-        var log = await after.ImportLogs.SingleAsync(TestContext.Current.CancellationToken);
-        log.CompletedAt.Should().Be(imported.CompletedAt, "the unchanged version isn't imported again");
-        log.LastCheckedAt.Should().BeGreaterThanOrEqualTo(beforeCheck);
+        (await after.ImportRuns.CountAsync(TestContext.Current.CancellationToken)).Should().Be(1, "the unchanged version isn't imported again");
+        var state = await after.SourceStates.SingleAsync(TestContext.Current.CancellationToken);
+        state.LastCheckedAt.Should().BeOnOrAfter(beforeCheck);
     }
 
     [Fact]
@@ -154,9 +150,9 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().Equal(["Alt"], "a failed import must not replace the previous data");
-            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            var failed = await context.ImportRuns.SingleAsync(r => r.Fingerprint == "ds/file/v2", TestContext.Current.CancellationToken);
             failed.CompletedAt.Should().BeNull();
-            failed.LastError.Should().Contain("upstream failed midway");
+            failed.Error.Should().Contain("upstream failed midway");
         }
 
         var fixedImporter = new StubPropertyImporter("a", "ds", "file", "v2",
@@ -167,9 +163,8 @@ public sealed class ImportOrchestratorTests(PostgresFixture fixture) : IAsyncLif
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().BeEquivalentTo(["Neu 1", "Neu 2"], "the failed version is retried, not skipped as already imported");
-            var retried = await context.ImportLogs.SingleAsync(l => l.FileTimestamp == "v2", TestContext.Current.CancellationToken);
+            var retried = await context.ImportRuns.SingleAsync(r => r.Fingerprint == "ds/file/v2" && r.FailedAt == null, TestContext.Current.CancellationToken);
             retried.CompletedAt.Should().NotBeNull();
-            retried.LastError.Should().BeNull();
         }
     }
 

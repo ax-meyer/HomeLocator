@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Xunit;
+using static Grundstuecksfinder.Tests.TestHelpers.ImportSeed;
 
 namespace Grundstuecksfinder.Tests;
 
@@ -17,19 +18,18 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    private async Task SeedAsync(params ImportLog[] logs)
+    /// <summary>Runs are inserted one by one, so their IDs follow the argument order.</summary>
+    private async Task SeedAsync(IEnumerable<ImportRun> runs, params SourceState[] states)
     {
         await using var context = fixture.CreateContext();
-        context.ImportLogs.AddRange(logs);
+        foreach (var run in runs)
+        {
+            context.ImportRuns.Add(run);
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        context.SourceStates.AddRange(states);
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
-
-    private static ImportLog Log(string source, string version, long importedAt, string? error = null, int skippedTiles = 0) => new()
-    {
-        Source = source, DatasetName = "ds", FileName = "f", FileTimestamp = version,
-        ImportedAt = importedAt, LastError = error, CompletedAt = error is null ? importedAt : null,
-        SkippedTiles = skippedTiles,
-    };
 
     private async Task<HealthCheckResult> CheckAsync(DisabledSources? disabled = null)
     {
@@ -41,9 +41,15 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task NoImportsYet_IsHealthy() =>
+        (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
+
+    [Fact]
     public async Task LatestAttemptFailed_IsDegradedAndNamesTheSource()
     {
-        await SeedAsync(Log("he", "v1", 1), Log("he", "v2", 2, "fetched only 90 of 100 addresses"), Log("sn", "v1", 1));
+        var he = Completed("he", Day(1));
+        var sn = Completed("sn", Day(1));
+        await SeedAsync([he, sn, Failed("he", Day(2), "fetched only 90 of 100 addresses")], Serving(he), Serving(sn));
 
         var result = await CheckAsync();
 
@@ -54,17 +60,29 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     [Fact]
     public async Task FailureFollowedByASuccess_IsHealthy()
     {
-        await SeedAsync(Log("he", "v1", 1, "boom"), Log("he", "v2", 2));
+        var he = Completed("he", Day(2));
+        await SeedAsync([Failed("he", Day(1), "boom"), he], Serving(he));
 
         (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
     }
 
     [Fact]
-    public async Task LatestImportSkippedTiles_IsDegradedAlthoughItSucceeded()
+    public async Task FailureFollowedByAnUnfinishedRun_IsStillReported()
     {
-        // The import is complete enough to serve, but nothing retries those tiles before the
-        // source's version changes, so the hole must not be invisible.
-        await SeedAsync(Log("bw", "v1", 1, skippedTiles: 3), Log("sn", "v1", 1));
+        // A retry that is still going (or was cut short by a crash) hasn't shown anything yet.
+        await SeedAsync([Failed("he", Day(1), "boom"), Unfinished("he", Day(2))]);
+
+        (await CheckAsync()).Description.Should().Contain("he: boom");
+    }
+
+    [Fact]
+    public async Task ServedRunSkippedParts_IsDegradedAlthoughItSucceeded()
+    {
+        // The import is complete enough to serve, but nothing fills the hole before the next
+        // re-import, so it must not be invisible.
+        var bw = Completed("bw", Day(1), skippedParts: 3);
+        var sn = Completed("sn", Day(1));
+        await SeedAsync([bw, sn], Serving(bw), Serving(sn));
 
         var result = await CheckAsync();
 
@@ -73,17 +91,19 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     }
 
     [Fact]
-    public async Task SkippedTilesFollowedByACleanImport_IsHealthy()
+    public async Task SkippedPartsReplacedByACleanImport_IsHealthy()
     {
-        await SeedAsync(Log("bw", "v1", 1, skippedTiles: 3), Log("bw", "v2", 2));
+        var clean = Completed("bw", Day(2));
+        await SeedAsync([Completed("bw", Day(1), skippedParts: 3), clean], Serving(clean));
 
         (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
     }
 
     [Fact]
-    public async Task FailureAndSkippedTiles_AreBothReported()
+    public async Task FailureAndSkippedParts_AreBothReported()
     {
-        await SeedAsync(Log("he", "v1", 1, "boom"), Log("bw", "v1", 1, skippedTiles: 2));
+        var bw = Completed("bw", Day(1), skippedParts: 2);
+        await SeedAsync([Failed("he", Day(1), "boom"), bw], Serving(bw));
 
         var result = await CheckAsync();
 
@@ -91,10 +111,35 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     }
 
     [Fact]
-    public async Task FailureOfADisabledSource_IsIgnored()
+    public async Task ProbeFailing_WithoutServedData_IsDegraded()
     {
-        await SeedAsync(Log("he", "v1", 1, "boom"));
+        await SeedAsync([], new SourceState { Source = "sh", LastProbeAt = Day(1), LastProbeError = "503 Service Unavailable" });
 
-        (await CheckAsync(new DisabledSources(["he"]))).Status.Should().Be(HealthStatus.Healthy);
+        var result = await CheckAsync();
+
+        result.Status.Should().Be(HealthStatus.Degraded);
+        result.Description.Should().Contain("sh: 503 Service Unavailable");
+    }
+
+    [Fact]
+    public async Task ProbeFailing_WhileDataIsServed_IsHealthy()
+    {
+        // The served data is no worse for a failed probe; the source is simply skipped this run.
+        var sh = Completed("sh", Day(1));
+        var state = Serving(sh);
+        state.LastProbeError = "503 Service Unavailable";
+        await SeedAsync([sh], state);
+
+        (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task ProblemsOfADisabledSource_AreIgnored()
+    {
+        var bw = Completed("bw", Day(1), skippedParts: 2);
+        await SeedAsync([Failed("he", Day(1), "boom"), bw],
+            Serving(bw), new SourceState { Source = "he", LastProbeError = "boom" });
+
+        (await CheckAsync(new DisabledSources(["he", "bw"]))).Status.Should().Be(HealthStatus.Healthy);
     }
 }
