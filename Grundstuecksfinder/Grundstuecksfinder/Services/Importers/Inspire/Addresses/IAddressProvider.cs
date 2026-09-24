@@ -50,9 +50,6 @@ public interface ITileAddresses
     /// hold and the tile must be split.
     /// </summary>
     Task<AddressTile> GetAsync(Tile tile, CancellationToken ct);
-
-    /// <summary>Logs whatever the provider counted along the way, once the tile loop is done.</summary>
-    void ReportSummary() { }
 }
 
 /// <summary>What <see cref="ITileAddresses.GetAsync"/> found in one tile.</summary>

@@ -35,7 +35,6 @@ public sealed class InspirePropertyImporter : IPropertySource
         InspireSourceOptions options,
         TimeProvider? timeProvider = null,
         IPostcodeAreaProvider? postcodeAreas = null,
-        NameCatalogLoader? nameCatalogLoader = null,
         ILoggerFactory? loggerFactory = null,
         RefreshPolicy? refreshPolicy = null,
         string? workDirectory = null)
@@ -50,20 +49,20 @@ public sealed class InspirePropertyImporter : IPropertySource
             httpClientFactory.CreateClient(HttpClientName), options, logger, timeProvider ?? TimeProvider.System, loggerFactory);
         _parcels = new InspireParcelProvider(
             new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, WfsFeatureType.ParcelType));
-        _addresses = CreateAddressProvider(client, nameCatalogLoader, ImportWorkDirectory.Resolve(workDirectory));
+        _addresses = CreateAddressProvider(client, ImportWorkDirectory.Resolve(workDirectory));
     }
 
     public string Id => _options.Source;
 
     public RefreshPolicy RefreshPolicy { get; }
 
-    private IAddressProvider CreateAddressProvider(InspireServiceClient client, NameCatalogLoader? nameCatalogLoader, string workDirectory)
+    private IAddressProvider CreateAddressProvider(InspireServiceClient client, string workDirectory)
     {
         var source = _options.AddressSource;
         return source.Type switch
         {
-            AddressSourceType.InspireWfs => new InspireWfsAddressProvider(AddressWfs(), _options, _logger, nameCatalogLoader),
-            AddressSourceType.InspireWfsStartIndex => new InspireWfsStartIndexAddressProvider(AddressWfs(), _options, _logger, nameCatalogLoader),
+            AddressSourceType.InspireWfs => new InspireWfsAddressProvider(AddressWfs(), _options),
+            AddressSourceType.InspireWfsStartIndex => new InspireWfsStartIndexAddressProvider(AddressWfs(), _options, _logger),
             AddressSourceType.OgcApiFeatures => new OgcApiFeaturesAddressProvider(client, _options, _logger),
             AddressSourceType.HkFile => new HkFileAddressProvider(client, _options, HkFileLocator(), workDirectory, _logger),
             _ => throw new InvalidOperationException($"{Id}: unknown AddressSource.Type {source.Type}."),
