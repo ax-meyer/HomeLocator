@@ -32,7 +32,7 @@ public partial class WfsLiveEndpointTests
 
     /// <summary>
     /// A GetFeature page addressed by startIndex rather than bbox, for services whose bbox filter
-    /// is unusable (see <see cref="Grundstuecksfinder.Services.Importers.Inspire.InspireSourceOptions.PageAddressesWithStartIndex"/>).
+    /// is unusable (see <see cref="Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressSourceType.InspireWfsStartIndex"/>).
     /// </summary>
     private static async Task<Stream> FetchGetFeaturePage(string baseUrl, string typeName, string crs,
         int startIndex, int count = 5, bool resolve = false)
@@ -50,7 +50,7 @@ public partial class WfsLiveEndpointTests
 
     /// <summary>
     /// A page from an OGC API Features "items" endpoint (see
-    /// <see cref="Grundstuecksfinder.Services.Importers.Inspire.InspireSourceOptions.UseOgcApiAddresses"/>),
+    /// <see cref="Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressSourceType.OgcApiFeatures"/>),
     /// addressed by limit/offset rather than a WFS bbox.
     /// </summary>
     private static async Task<Stream> FetchOgcApiFeatures(string baseUrl, int limit, int offset = 0)

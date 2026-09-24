@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -10,7 +11,7 @@ public sealed class InspireSourceOptionsTests
     {
         Source = source,
         ParcelWfsUrl = "https://example.org/cp",
-        AddressWfsUrl = "https://example.org/ad",
+        AddressSource = new AddressSourceOptions { Url = "https://example.org/ad" },
         Crs = "http://www.opengis.net/def/crs/epsg/0/25832",
         BoundingBox = new InspireBoundingBox { MinX = 0, MinY = 0, MaxX = 10, MaxY = 10 },
     };
@@ -60,26 +61,37 @@ public sealed class InspireSourceOptionsTests
     }
 
     [Fact]
-    public void Validate_BothAddressPagingStrategiesSet_IsRejected()
+    public void Validate_AddressSourceWithoutUrl_IsRejected()
     {
         var broken = Valid();
-        broken.PageAddressesWithStartIndex = true;
-        broken.UseOgcApiAddresses = true;
+        broken.AddressSource.Url = "";
 
         var errors = InspireSourceOptions.Validate([broken], []);
 
-        errors.Should().ContainSingle(e => e.Contains("mutually exclusive"));
+        errors.Should().ContainSingle().Which.Should().Be("sh: AddressSource.Url must be an absolute http(s) URL.");
     }
 
     [Fact]
-    public void Validate_OgcApiAddressesWithNonPositivePageSize_IsRejected()
+    public void Validate_UndefinedAddressSourceType_IsRejected()
     {
+        // The config binder accepts a number for an enum, so "Type": "7" would bind.
         var broken = Valid();
-        broken.UseOgcApiAddresses = true;
-        broken.OgcApiAddressPageSize = 0;
+        broken.AddressSource.Type = (AddressSourceType)7;
 
         var errors = InspireSourceOptions.Validate([broken], []);
 
-        errors.Should().ContainSingle(e => e.Contains("OgcApiAddressPageSize"));
+        errors.Should().ContainSingle(e => e.Contains("AddressSource.Type must be one of"));
+    }
+
+    [Fact]
+    public void Validate_OgcApiFeaturesWithNonPositivePageSize_IsRejected()
+    {
+        var broken = Valid();
+        broken.AddressSource.Type = AddressSourceType.OgcApiFeatures;
+        broken.AddressSource.OgcApiPageSize = 0;
+
+        var errors = InspireSourceOptions.Validate([broken], []);
+
+        errors.Should().ContainSingle(e => e.Contains("AddressSource.OgcApiPageSize"));
     }
 }

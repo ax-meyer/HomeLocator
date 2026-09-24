@@ -4,6 +4,7 @@ using FakeItEasy;
 using FluentAssertions;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,7 +32,7 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
     {
         Source = Source,
         ParcelWfsUrl = FakeWfsServer.ParcelUrl,
-        AddressWfsUrl = FakeWfsServer.AddressUrl,
+        AddressSource = new AddressSourceOptions { Url = FakeWfsServer.AddressUrl },
         Crs = "urn:ogc:def:crs:EPSG::25832",
         BoundingBox = new InspireBoundingBox { MinX = 0, MinY = 0, MaxX = 100, MaxY = 100 },
         TileSizeMeters = 100,

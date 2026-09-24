@@ -1,17 +1,18 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Grundstuecksfinder.Services.Importers.Scheduling;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
-/// Config for one INSPIRE-split Bundesland: a parcel WFS (area+geometry) and an address WFS
+/// Config for one INSPIRE-split Bundesland: a parcel WFS (area+geometry) and an address source
 /// (text+geometry), joined spatially since neither dataset carries both. Adding a state is
 /// adding an entry to "Import:Inspire:Sources" — no new code.
 /// </summary>
 public partial class InspireSourceOptions
 {
-    /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Source"/>.</summary>
+    /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Id"/>.</summary>
     public string Source { get; set; } = string.Empty;
 
     /// <summary>
@@ -31,15 +32,16 @@ public partial class InspireSourceOptions
     public string ParcelWfsUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Base URL of the address source: the ad:Address WFS (INSPIRE download service), or — with
-    /// <see cref="UseOgcApiAddresses"/> — an OGC API Features collection's "items" endpoint.
+    /// Where the addresses (text + point) come from. The parcel side is always the INSPIRE
+    /// WFS above; the address side is whichever of the state's datasets is usable and fastest.
     /// </summary>
-    public string AddressWfsUrl { get; set; } = string.Empty;
+    public AddressSourceOptions AddressSource { get; set; } = new();
 
     /// <summary>
-    /// The CRS both services are asked for (srsName) and must answer in, e.g.
-    /// "urn:ogc:def:crs:EPSG::25832". Must be an ETRS89/UTM zone (EPSG 25831–25833): tiling
-    /// assumes metres with easting first. A response in any other CRS fails the import.
+    /// The CRS the WFS services are asked for (srsName) and must answer in, and that the
+    /// addresses from any other source must be in, e.g. "urn:ogc:def:crs:EPSG::25832". Must be
+    /// an ETRS89/UTM zone (EPSG 25831–25833): tiling assumes metres with easting first. Data in
+    /// any other CRS fails the import.
     /// </summary>
     public string Crs { get; set; } = string.Empty;
 
@@ -55,34 +57,11 @@ public partial class InspireSourceOptions
     public double MinTileSizeMeters { get; set; } = 50;
 
     /// <summary>
-    /// Max features requested per GetFeature call. The importer never pages via startIndex (some
-    /// servers ignore it); a tile returning this many features is split into four instead. Capped
-    /// further by the server's advertised CountDefault.
+    /// Max features requested per WFS GetFeature call. Parcels are never paged via startIndex
+    /// (some servers ignore it); a tile returning this many features is split into four instead.
+    /// Capped further by the server's advertised CountDefault.
     /// </summary>
     public int PageSize { get; set; } = 5000;
-
-    /// <summary>
-    /// For Hamburg: fetch the addresses once, paging with startIndex, instead of per tile. Its
-    /// address geometries carry SRID 0, so every bbox filter fails server-side ("Operation on
-    /// mixed SRID geometries"). Only for services whose paging is known to be stable — pages
-    /// must not shift between requests, or addresses are silently lost.
-    /// </summary>
-    public bool PageAddressesWithStartIndex { get; set; }
-
-    /// <summary>
-    /// For Saarland: fetch the addresses once from an OGC API Features "items" endpoint carrying
-    /// the ALKIS-native Hauskoordinaten schema (GeoJSON, paged with limit/offset — see
-    /// <see cref="OgcApiAddressParser"/>) instead of its hopelessly slow INSPIRE ad:Address WFS.
-    /// Mutually exclusive with <see cref="PageAddressesWithStartIndex"/>.
-    /// </summary>
-    public bool UseOgcApiAddresses { get; set; }
-
-    /// <summary>
-    /// With <see cref="UseOgcApiAddresses"/>: features requested per page. The server may only
-    /// accept specific values (Saarland: 1, 5, 10, 20, 50, 100, 200, 500, 1000, 2500) — check
-    /// live before changing this.
-    /// </summary>
-    public int OgcApiAddressPageSize { get; set; } = 2500;
 
     /// <summary>
     /// For Hamburg/Berlin: the Land itself is the Gemeinde, and the ad:level hierarchy maps
@@ -174,8 +153,9 @@ public partial class InspireSourceOptions
     public double CircuitBreakSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Minimum share of the address service's reported total that must have been fetched, or
-    /// the import fails and the previous data stays.
+    /// Minimum share of the address source's own total (see
+    /// <see cref="Addresses.ITileAddresses.ExpectedCount"/>) that must have been joined, or the
+    /// import fails and the previous data stays.
     /// </summary>
     public double MinCompleteness { get; set; } = 0.95;
 
@@ -222,8 +202,7 @@ public partial class InspireSourceOptions
 
             if (!IsHttpUrl(s.ParcelWfsUrl))
                 errors.Add($"{name}: ParcelWfsUrl must be an absolute http(s) URL.");
-            if (!IsHttpUrl(s.AddressWfsUrl))
-                errors.Add($"{name}: AddressWfsUrl must be an absolute http(s) URL.");
+            errors.AddRange(s.AddressSource.Validate().Select(e => $"{name}: AddressSource.{e}"));
             if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
                 errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
 
@@ -234,10 +213,6 @@ public partial class InspireSourceOptions
                 errors.Add($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters.");
             if (s.PageSize < 1)
                 errors.Add($"{name}: PageSize must be positive.");
-            if (s.PageAddressesWithStartIndex && s.UseOgcApiAddresses)
-                errors.Add($"{name}: PageAddressesWithStartIndex and UseOgcApiAddresses are mutually exclusive paging strategies.");
-            if (s.UseOgcApiAddresses && s.OgcApiAddressPageSize < 1)
-                errors.Add($"{name}: OgcApiAddressPageSize must be positive.");
             if (s.MaxAttempts < 1)
                 errors.Add($"{name}: MaxAttempts must be at least 1.");
             if (s.MaxFailedTiles < 0)
@@ -266,7 +241,7 @@ public partial class InspireSourceOptions
         return errors;
     }
 
-    private static bool IsHttpUrl(string url) =>
+    internal static bool IsHttpUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
 
     [GeneratedRegex(@"epsg(?:::|:|/0/|/)(\d+)$", RegexOptions.IgnoreCase)]

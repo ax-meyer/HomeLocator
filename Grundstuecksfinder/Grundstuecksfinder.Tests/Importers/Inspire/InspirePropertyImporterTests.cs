@@ -6,6 +6,7 @@ using FluentAssertions;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Logging;
@@ -24,8 +25,8 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 /// </summary>
 public sealed class InspirePropertyImporterTests
 {
-    /// <summary>The importer re-reads the counts itself, so any probe of its kind will do.</summary>
-    private static readonly SourceProbe Probe = new("4:4", FingerprintKind.Approximate);
+    /// <summary>The WFS sides re-read their counts themselves, so any probe of this source's kind will do.</summary>
+    private static readonly InspireProbe Probe = InspireProbe.Combine(new FingerprintPart("4", false), new FingerprintPart("4", false));
 
     private static InspireSourceOptions Options(Action<InspireSourceOptions>? tweak = null)
     {
@@ -33,7 +34,7 @@ public sealed class InspirePropertyImporterTests
         {
             Source = "test",
             ParcelWfsUrl = FakeWfsServer.ParcelUrl,
-            AddressWfsUrl = FakeWfsServer.AddressUrl,
+            AddressSource = new AddressSourceOptions { Url = FakeWfsServer.AddressUrl },
             Crs = "urn:ogc:def:crs:EPSG::25832",
             BoundingBox = new InspireBoundingBox { MinX = 0, MinY = 0, MaxX = 100, MaxY = 100 },
             TileSizeMeters = 100,
@@ -301,7 +302,7 @@ public sealed class InspirePropertyImporterTests
 
         var thrown = (await act.Should().ThrowAsync<InspireImportException>()
             .WithMessage("*gave up on 3 tiles (maximum 2)*")).Which;
-        thrown.InnerException.Should().BeOfType<WfsHttpException>("the failure that broke the budget is kept");
+        thrown.InnerException.Should().BeOfType<SourceHttpException>("the failure that broke the budget is kept");
         server.GetFeatureRequests(FakeWfsServer.AddressUrl).Should().HaveCount(9,
             "it stops at the fourth failing tile, each tried MaxAttempts times");
     }
@@ -568,7 +569,24 @@ public sealed class InspirePropertyImporterTests
         // the planner's decision.
         var probe = await Importer(GridServer(2), Options()).ProbeAsync(TestContext.Current.CancellationToken);
 
-        probe.Should().Be(new SourceProbe("4:4", FingerprintKind.Approximate));
+        probe.Fingerprint.Should().Be("4:4");
+        probe.Kind.Should().Be(FingerprintKind.Approximate);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_CarriesEachSidesPartForTheFetch_ParcelsFirst()
+    {
+        var server = GridServer(2);
+        server.Parcels.RemoveAt(0);
+
+        var probe = await Importer(server, Options()).ProbeAsync(TestContext.Current.CancellationToken);
+
+        probe.Should().BeOfType<InspireProbe>().Which.Should().BeEquivalentTo(new
+        {
+            Fingerprint = "3:4",
+            Parcels = new FingerprintPart("3", IsExact: false),
+            Addresses = new FingerprintPart("4", IsExact: false),
+        });
     }
 
     [Fact]
@@ -580,7 +598,7 @@ public sealed class InspirePropertyImporterTests
         var act = () => Importer(server, Options()).ProbeAsync(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InspireImportException>("without a total, the import's completeness can't be checked")
-            .WithMessage("*feature counts*");
+            .WithMessage("the address service doesn't report a feature count*");
     }
 
     [Fact]
@@ -595,7 +613,7 @@ public sealed class InspirePropertyImporterTests
             </wfs:WFS_Capabilities>
             """);
 
-        InspirePropertyImporter.ParseCountDefault(capabilities).Should().Be(10000);
+        WfsFeatureType.ParseCountDefault(capabilities).Should().Be(10000);
     }
 
     [Fact]
@@ -765,7 +783,7 @@ public sealed class InspirePropertyImporterTests
         var rows = await FetchAllAsync(Importer(server, Options(o =>
         {
             o.PageSize = 30;
-            o.PageAddressesWithStartIndex = true;
+            o.AddressSource.Type = AddressSourceType.InspireWfsStartIndex;
         })));
 
         rows.Select(r => r.Str).Should().OnlyHaveUniqueItems().And.HaveCount(100);
@@ -787,7 +805,7 @@ public sealed class InspirePropertyImporterTests
         var fetch = async () => await FetchAllAsync(Importer(server, Options(o =>
         {
             o.PageSize = 30;
-            o.PageAddressesWithStartIndex = true;
+            o.AddressSource.Type = AddressSourceType.InspireWfsStartIndex;
         })));
 
         (await fetch.Should().ThrowAsync<InspireImportException>())
@@ -803,8 +821,8 @@ public sealed class InspirePropertyImporterTests
 
         var rows = await FetchAllAsync(Importer(server, Options(o =>
         {
-            o.UseOgcApiAddresses = true;
-            o.OgcApiAddressPageSize = 30;
+            o.AddressSource.Type = AddressSourceType.OgcApiFeatures;
+            o.AddressSource.OgcApiPageSize = 30;
         })));
 
         rows.Select(r => r.Str).Should().OnlyHaveUniqueItems().And.HaveCount(100);
@@ -824,8 +842,8 @@ public sealed class InspirePropertyImporterTests
 
         var fetch = async () => await FetchAllAsync(Importer(server, Options(o =>
         {
-            o.UseOgcApiAddresses = true;
-            o.OgcApiAddressPageSize = 30;
+            o.AddressSource.Type = AddressSourceType.OgcApiFeatures;
+            o.AddressSource.OgcApiPageSize = 30;
         })));
 
         (await fetch.Should().ThrowAsync<InspireImportException>())
@@ -843,7 +861,7 @@ public sealed class InspirePropertyImporterTests
     {
         var server = GridServer(3); // 9 parcels, 9 addresses
 
-        var rows = await FetchAllAsync(Importer(server, Options(o => o.UseOgcApiAddresses = true)));
+        var rows = await FetchAllAsync(Importer(server, Options(o => o.AddressSource.Type = AddressSourceType.OgcApiFeatures)));
 
         rows.Should().HaveCount(9);
     }
@@ -853,7 +871,7 @@ public sealed class InspirePropertyImporterTests
     {
         var server = GridServer(2); // 4 parcels, 4 addresses
 
-        var probe = await Importer(server, Options(o => o.UseOgcApiAddresses = true))
+        var probe = await Importer(server, Options(o => o.AddressSource.Type = AddressSourceType.OgcApiFeatures))
             .ProbeAsync(TestContext.Current.CancellationToken);
 
         probe.Fingerprint.Should().Be("4:4");
