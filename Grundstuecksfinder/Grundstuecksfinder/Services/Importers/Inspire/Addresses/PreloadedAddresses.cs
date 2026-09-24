@@ -34,6 +34,12 @@ public sealed class PreloadedAddresses : ITileAddresses
     private readonly Dictionary<(int X, int Y), (int Start, int Count)> _cells;
     private readonly double _cellSize;
 
+    /// <summary>
+    /// The range of cells holding any address, so a query reaching far beyond the data (the
+    /// whole state's bbox, say) doesn't walk millions of empty cells.
+    /// </summary>
+    private readonly (int MinX, int MinY, int MaxX, int MaxY) _occupied;
+
     private PreloadedAddresses(Builder builder, long expectedCount)
     {
         _rows = builder.Rows;
@@ -51,13 +57,16 @@ public sealed class PreloadedAddresses : ITileAddresses
         });
 
         _cells = [];
+        _occupied = (int.MaxValue, int.MaxValue, int.MinValue, int.MinValue);
         var rows = CollectionsMarshal.AsSpan(_rows);
         for (var start = 0; start < rows.Length;)
         {
-            var key = (Cell(rows[start].X, cellSize), Cell(rows[start].Y, cellSize));
+            var key = (X: Cell(rows[start].X, cellSize), Y: Cell(rows[start].Y, cellSize));
             var end = start + 1;
             while (end < rows.Length && (Cell(rows[end].X, cellSize), Cell(rows[end].Y, cellSize)) == key) end++;
             _cells[key] = (start, end - start);
+            _occupied = (Math.Min(_occupied.MinX, key.X), Math.Min(_occupied.MinY, key.Y),
+                Math.Max(_occupied.MaxX, key.X), Math.Max(_occupied.MaxY, key.Y));
             start = end;
         }
     }
@@ -81,9 +90,11 @@ public sealed class PreloadedAddresses : ITileAddresses
     {
         var result = new List<AddressFeature>();
         var rows = CollectionsMarshal.AsSpan(_rows);
-        for (var cx = Cell(envelope.MinX, _cellSize); cx <= Cell(envelope.MaxX, _cellSize); cx++)
+        var maxX = Math.Min(Cell(envelope.MaxX, _cellSize), _occupied.MaxX);
+        var maxY = Math.Min(Cell(envelope.MaxY, _cellSize), _occupied.MaxY);
+        for (var cx = Math.Max(Cell(envelope.MinX, _cellSize), _occupied.MinX); cx <= maxX; cx++)
         {
-            for (var cy = Cell(envelope.MinY, _cellSize); cy <= Cell(envelope.MaxY, _cellSize); cy++)
+            for (var cy = Math.Max(Cell(envelope.MinY, _cellSize), _occupied.MinY); cy <= maxY; cy++)
             {
                 if (!_cells.TryGetValue((cx, cy), out var cell)) continue;
                 foreach (ref readonly var row in rows.Slice(cell.Start, cell.Count))
@@ -106,7 +117,8 @@ public sealed class PreloadedAddresses : ITileAddresses
             row.Street < 0 ? null : _streets[row.Street], hnr, hnrZus, plz, ort, gemeinde);
     }
 
-    private static int Cell(double coordinate, double cellSize) => (int)Math.Floor(coordinate / cellSize);
+    private static int Cell(double coordinate, double cellSize) =>
+        (int)Math.Clamp(Math.Floor(coordinate / cellSize), int.MinValue, int.MaxValue);
 
     /// <summary>One address: 8+8+4+4+4 bytes, 32 with padding.</summary>
     internal readonly record struct Row(double X, double Y, int Street, int HouseNumber, int Place);

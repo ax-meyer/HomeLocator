@@ -49,6 +49,19 @@ public sealed class PreloadedAddressesTests
     }
 
     [Fact]
+    public void Query_EnvelopeFarBeyondTheData_OnlyVisitsOccupiedCells()
+    {
+        // A 1 m grid over ±1000 km would be 4·10¹² cells if walked blindly.
+        var index = Build(1, (5, 5, "a"), (7, 9, "b"));
+
+        index.Query(new Envelope(-1e6, 1e6, -1e6, 1e6)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void Query_NoAddresses_FindsNothing() =>
+        new PreloadedAddresses.Builder().Build(expectedCount: 0).Query(new Envelope(0, 10, 0, 10)).Should().BeEmpty();
+
+    [Fact]
     public void Query_ReturnsEveryFieldAsAdded()
     {
         var builder = new PreloadedAddresses.Builder();
