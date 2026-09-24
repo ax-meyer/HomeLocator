@@ -37,7 +37,8 @@ public sealed class InspirePropertyImporter : IPropertySource
         IPostcodeAreaProvider? postcodeAreas = null,
         NameCatalogLoader? nameCatalogLoader = null,
         ILoggerFactory? loggerFactory = null,
-        RefreshPolicy? refreshPolicy = null)
+        RefreshPolicy? refreshPolicy = null,
+        string? workDirectory = null)
     {
         _logger = logger;
         _options = options;
@@ -49,14 +50,14 @@ public sealed class InspirePropertyImporter : IPropertySource
             httpClientFactory.CreateClient(HttpClientName), options, logger, timeProvider ?? TimeProvider.System, loggerFactory);
         _parcels = new InspireParcelProvider(
             new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, WfsFeatureType.ParcelType));
-        _addresses = CreateAddressProvider(client, nameCatalogLoader);
+        _addresses = CreateAddressProvider(client, nameCatalogLoader, ImportWorkDirectory.Resolve(workDirectory));
     }
 
     public string Id => _options.Source;
 
     public RefreshPolicy RefreshPolicy { get; }
 
-    private IAddressProvider CreateAddressProvider(InspireServiceClient client, NameCatalogLoader? nameCatalogLoader)
+    private IAddressProvider CreateAddressProvider(InspireServiceClient client, NameCatalogLoader? nameCatalogLoader, string workDirectory)
     {
         var source = _options.AddressSource;
         return source.Type switch
@@ -64,10 +65,18 @@ public sealed class InspirePropertyImporter : IPropertySource
             AddressSourceType.InspireWfs => new InspireWfsAddressProvider(AddressWfs(), _options, _logger, nameCatalogLoader),
             AddressSourceType.InspireWfsStartIndex => new InspireWfsStartIndexAddressProvider(AddressWfs(), _options, _logger, nameCatalogLoader),
             AddressSourceType.OgcApiFeatures => new OgcApiFeaturesAddressProvider(client, _options, _logger),
+            AddressSourceType.HkFile => new HkFileAddressProvider(client, _options, HkFileLocator(), workDirectory, _logger),
             _ => throw new InvalidOperationException($"{Id}: unknown AddressSource.Type {source.Type}."),
         };
 
         WfsFeatureType AddressWfs() => new(client, _options, _logger, source.Url, WfsFeatureType.AddressType);
+
+        IHkFileLocator HkFileLocator() => source.Locator switch
+        {
+            HkFileLocatorType.StaticUrl => new StaticUrlHkFileLocator(client, source.Url),
+            HkFileLocatorType.HessenDownloadCenter => new HessenDownloadCenterLocator(client, source.Url),
+            _ => throw new InvalidOperationException($"{Id}: unknown AddressSource.Locator {source.Locator}."),
+        };
     }
 
     /// <summary>
@@ -80,14 +89,17 @@ public sealed class InspirePropertyImporter : IPropertySource
 
     /// <summary>
     /// Fetches and joins the whole state; tiles given up on are reported to <paramref name="run"/>.
+    /// The probe's address part goes to the address provider, so a file provider can tell
+    /// whether its edition changed since (see <see cref="IAddressProvider.LoadAsync"/>); if it
+    /// did, the run is told the fingerprint of what was really imported.
     /// </summary>
     public async IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
     {
-        if (probe is not InspireProbe)
+        if (probe is not InspireProbe inspireProbe)
             throw new ArgumentException($"Expected the probe of {nameof(InspirePropertyImporter)}, got {probe.GetType().Name}.", nameof(probe));
 
         var join = new ParcelAddressJoin(_options, _logger, _parcels, _addresses, _postcodeAreas);
-        await foreach (var property in join.RunAsync(run, ct))
+        await foreach (var property in join.RunAsync(inspireProbe, run, ct))
             yield return property;
     }
 }

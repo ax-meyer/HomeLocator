@@ -86,6 +86,25 @@ public sealed partial class InspireServiceClient(
         return await JsonDocument.ParseAsync(body, cancellationToken: ct);
     }
 
+    /// <summary>
+    /// One attempt at downloading a file to <paramref name="path"/>. Call inside
+    /// <see cref="ExecuteAsync{T}"/> with a timeout sized for the file. There is no resume:
+    /// every attempt starts the file over.
+    /// </summary>
+    /// <returns>The file's size in bytes.</returns>
+    public async Task<long> DownloadOnceAsync(string url, string path, CancellationToken ct)
+    {
+        using var response = await SendAsync(HttpMethod.Get, url, accept: null, ct);
+        await using var file = File.Create(path);
+        await response.Content.CopyToAsync(file, ct);
+        // A body cut short without an error would only surface as a broken ZIP, which isn't
+        // retried; a short file is.
+        if (response.Content.Headers.ContentLength is { } expected && file.Length != expected)
+            throw new IOException(FormattableString.Invariant(
+                $"The download of {url} ended after {file.Length} of {expected} bytes."));
+        return file.Length;
+    }
+
     private async Task<MemoryStream> ReadBodyAsync(string url, string? accept, CancellationToken ct)
     {
         using var response = await SendAsync(HttpMethod.Get, url, accept, ct);

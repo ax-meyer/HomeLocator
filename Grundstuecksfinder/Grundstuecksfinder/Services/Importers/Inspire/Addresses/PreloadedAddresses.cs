@@ -40,8 +40,9 @@ public sealed class PreloadedAddresses : ITileAddresses
     /// </summary>
     private readonly (int MinX, int MinY, int MaxX, int MaxY) _occupied;
 
-    private PreloadedAddresses(Builder builder, long expectedCount)
+    private PreloadedAddresses(Builder builder, long expectedCount, FingerprintPart? loaded)
     {
+        Loaded = loaded;
         _rows = builder.Rows;
         _cellSize = builder.CellSize;
         _streets = [.. builder.Streets.Values];
@@ -75,6 +76,8 @@ public sealed class PreloadedAddresses : ITileAddresses
     public int Count => _rows.Count;
 
     public long ExpectedCount { get; }
+
+    public FingerprintPart? Loaded { get; }
 
     public string Description => string.Create(CultureInfo.InvariantCulture, $"{Count} preloaded");
 
@@ -153,7 +156,8 @@ public sealed class PreloadedAddresses : ITileAddresses
                 Places.Intern((plz, ort, gemeinde))));
 
         /// <param name="expectedCount">What the source says it has; see <see cref="ITileAddresses.ExpectedCount"/>.</param>
-        public PreloadedAddresses Build(long expectedCount) => new(this, expectedCount);
+        /// <param name="loaded">The version loaded, if it may differ from the probe's; see <see cref="ITileAddresses.Loaded"/>.</param>
+        public PreloadedAddresses Build(long expectedCount, FingerprintPart? loaded = null) => new(this, expectedCount, loaded);
     }
 
     /// <summary>Distinct values in the order first seen, each with its index.</summary>

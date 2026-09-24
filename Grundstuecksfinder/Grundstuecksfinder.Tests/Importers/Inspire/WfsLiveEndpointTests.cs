@@ -1,10 +1,14 @@
+using Grundstuecksfinder.Infrastructure;
+using Grundstuecksfinder.Services.Importers.Inspire;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
 
 /// <summary>
-/// Smoke tests that hit each configured Bundesland's real WFS endpoints with a tiny bounding box to verify
-/// that the GML response structure can be parsed. These are live network tests — they will fail
+/// Smoke tests that hit each configured Bundesland's real endpoints — WFS requests with a tiny bounding
+/// box, and the cheap version check of a Hauskoordinaten file (never the file itself) — to verify
+/// that the responses can still be parsed. These are live network tests — they will fail
 /// if the server is down or changes its response format. Each state's tests live in
 /// WfsLiveEndpointTests.&lt;State&gt;.cs next to this file.
 /// </summary>
@@ -12,6 +16,24 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 public partial class WfsLiveEndpointTests
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+
+    /// <summary>
+    /// The importer's own gateway, for the checks that go through it (the Hauskoordinaten file
+    /// locators): identified like the app, one quick retry, no pacing.
+    /// </summary>
+    private static InspireServiceClient LiveClient()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(OutboundHttp.UserAgent);
+        return new InspireServiceClient(http, new InspireSourceOptions
+        {
+            Source = "live",
+            MaxAttempts = 2,
+            RetryBaseDelaySeconds = 1,
+            MaxRetryDelaySeconds = 1,
+            MinRequestIntervalSeconds = 0,
+        }, NullLogger.Instance, TimeProvider.System);
+    }
 
     private static async Task<Stream> FetchGetFeature(string baseUrl, string typeName, string bbox, string crs,
         int count = 5, bool resolve = false)

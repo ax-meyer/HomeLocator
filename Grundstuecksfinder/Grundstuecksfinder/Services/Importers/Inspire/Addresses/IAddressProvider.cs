@@ -17,9 +17,12 @@ public interface IAddressProvider
 
     /// <summary>
     /// Readies the addresses for the tile loop — preloads all of them, or only learns what a
-    /// per-tile request needs. Called once per import, before the first tile.
+    /// per-tile request needs. Called once per import, before the first tile, with the part
+    /// <see cref="ProbeAsync"/> returned in the run being imported: a provider whose upstream
+    /// can change between probe and fetch (hours apart, across midnight on an initial run)
+    /// checks what it finds against it.
     /// </summary>
-    Task<ITileAddresses> LoadAsync(CancellationToken ct);
+    Task<ITileAddresses> LoadAsync(FingerprintPart probed, CancellationToken ct);
 }
 
 /// <summary>A source's addresses, as the tile loop asks for them.</summary>
@@ -33,6 +36,13 @@ public interface ITileAddresses
 
     /// <summary>How the addresses are fetched, for the import log.</summary>
     string Description { get; }
+
+    /// <summary>
+    /// The version of the addresses actually loaded, for a provider whose upstream can move
+    /// between probe and fetch (a file located again at download time); null where the probe's
+    /// part stands for what is fetched.
+    /// </summary>
+    FingerprintPart? Loaded => null;
 
     /// <summary>
     /// The addresses in a tile, including those on its edges (the caller keeps only the ones the

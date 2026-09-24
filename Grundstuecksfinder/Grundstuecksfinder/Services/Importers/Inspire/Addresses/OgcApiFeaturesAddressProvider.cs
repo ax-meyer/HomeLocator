@@ -22,7 +22,7 @@ public sealed partial class OgcApiFeaturesAddressProvider(
     public async Task<FingerprintPart> ProbeAsync(CancellationToken ct) =>
         FingerprintPart.FromCount(await GetNumberMatchedAsync(ct), "address");
 
-    public async Task<ITileAddresses> LoadAsync(CancellationToken ct)
+    public async Task<ITileAddresses> LoadAsync(FingerprintPart probed, CancellationToken ct)
     {
         var expected = await GetNumberMatchedAsync(ct)
             ?? throw new InspireImportException($"{options.Source}: the address service no longer reports a feature count.");

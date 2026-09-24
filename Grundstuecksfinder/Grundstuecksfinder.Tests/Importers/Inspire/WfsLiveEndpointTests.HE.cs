@@ -1,5 +1,8 @@
+using System.Net;
+using System.Net.Http.Headers;
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -36,6 +39,32 @@ public partial class WfsLiveEndpointTests
         var addresses = WfsGmlParser.ParseAddresses(stream).Features.ToList();
         addresses.Should().NotBeEmpty("HE should have addresses in this tile near Frankfurt");
         addresses.Should().OnlyContain(a => a.Location != null);
+    }
+
+    // ── Hessen's Hauskoordinaten file, via the download center ───────────────
+
+    private const string HessenHauskoordinatenListing =
+        "https://gds.hessen.de/INTERSHOP/rest/WFS/HLBG-Geodaten-Site/-/downloadcenter?path=Liegenschaftskataster/Hauskoordinaten%20ohne%20Postalische%20Angaben%20(txt)&navigation=all";
+
+    /// <summary>
+    /// The listing names the current edition and today's link to it. Only the first bytes of
+    /// the file are fetched — enough to show the escaped link works and leads to a ZIP.
+    /// </summary>
+    [Fact]
+    public async Task HE_HauskoordinatenFile_IsListedInTheDownloadCenter()
+    {
+        var location = await new HessenDownloadCenterLocator(LiveClient(), HessenHauskoordinatenListing)
+            .LocateAsync(TestContext.Current.CancellationToken);
+
+        location.Version.Should().MatchRegex(@"^Hauskoordinaten ohne Postalische Angaben-\d{4}-\d{2}\|\d{2}\.\d{2}\.\d{4}$");
+        location.Url.Should().MatchRegex(@"^https://gds\.hessen\.de/downloadcenter/\d{8}/.+\.zip$", "the link carries the day it is valid on");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, location.Url);
+        request.Headers.Range = new RangeHeaderValue(0, 3);
+        using var response = await Http.SendAsync(request, TestContext.Current.CancellationToken);
+        response.StatusCode.Should().Be(HttpStatusCode.PartialContent);
+        (await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken))
+            .Should().Equal((byte)'P', (byte)'K', (byte)3, (byte)4);
     }
 
     // ── Hessen's name catalogue (the sources that still carry intact spellings) ──

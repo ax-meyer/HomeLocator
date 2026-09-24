@@ -13,6 +13,9 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
 
     public List<Uri> RequestedUris { get; } = [];
 
+    /// <summary>Method and Accept header of each request, in the order of <see cref="RequestedUris"/>.</summary>
+    public List<(HttpMethod Method, string Accept)> RequestDetails { get; } = [];
+
     public void AddRoute(string url, Func<HttpResponseMessage> factory) =>
         _routes[url] = factory;
 
@@ -23,6 +26,7 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         RequestedUris.Add(request.RequestUri!);
+        RequestDetails.Add((request.Method, request.Headers.Accept.ToString()));
         var url = request.RequestUri!.ToString();
         var factory = _routes.GetValueOrDefault(url) ?? _default;
         var response = factory?.Invoke()

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -93,5 +94,99 @@ public sealed class InspireSourceOptionsTests
         var errors = InspireSourceOptions.Validate([broken], []);
 
         errors.Should().ContainSingle(e => e.Contains("AddressSource.OgcApiPageSize"));
+    }
+
+    private static InspireSourceOptions ValidHkFile()
+    {
+        var options = Valid("bw");
+        options.AddressSource = new AddressSourceOptions
+        {
+            Type = AddressSourceType.HkFile,
+            Url = "https://example.org/hk_bw.zip",
+            Member = "adressen-bw.txt",
+        };
+        return options;
+    }
+
+    [Fact]
+    public void Validate_ValidHkFile_HasNoErrors() =>
+        InspireSourceOptions.Validate([ValidHkFile()], []).Should().BeEmpty();
+
+    [Fact]
+    public void Validate_BrokenHkFile_IsAllReported()
+    {
+        var broken = ValidHkFile();
+        broken.AddressSource.Member = " ";
+        broken.AddressSource.AllowedQualities = ["A", ""];
+        broken.AddressSource.DownloadTimeoutSeconds = 0;
+        broken.AddressSource.Locator = (HkFileLocatorType)9;
+
+        var errors = InspireSourceOptions.Validate([broken], []);
+
+        errors.Should().BeEquivalentTo(
+            "bw: AddressSource.Locator must be one of StaticUrl, HessenDownloadCenter.",
+            "bw: AddressSource.Member must name the ZIP entry to read.",
+            "bw: AddressSource.AllowedQualities must list at least one quality, and no blank ones.",
+            "bw: AddressSource.DownloadTimeoutSeconds must be greater than 0 and at most 86400.");
+    }
+
+    [Theory]
+    [InlineData(86_401)]
+    [InlineData(double.MaxValue)] // would overflow TimeSpan.FromSeconds at the first download
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NaN)]
+    public void Validate_DownloadTimeoutOutOfRange_IsRejected(double seconds)
+    {
+        var broken = ValidHkFile();
+        broken.AddressSource.DownloadTimeoutSeconds = seconds;
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle(e => e.Contains("DownloadTimeoutSeconds"));
+    }
+
+    [Fact]
+    public void Validate_LongestDownloadTimeout_IsAccepted()
+    {
+        var options = ValidHkFile();
+        options.AddressSource.DownloadTimeoutSeconds = AddressSourceOptions.MaxDownloadTimeoutSeconds;
+
+        InspireSourceOptions.Validate([options], []).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10_001)]
+    public void Validate_OgcApiPageSizeOutOfRange_IsRejected(int pageSize)
+    {
+        var broken = Valid();
+        broken.AddressSource.Type = AddressSourceType.OgcApiFeatures;
+        broken.AddressSource.OgcApiPageSize = pageSize;
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle()
+            .Which.Should().Be("sh: AddressSource.OgcApiPageSize must be between 1 and 10000.");
+    }
+
+    [Fact]
+    public void Validate_EmptyAllowedQualities_IsRejected()
+    {
+        var broken = ValidHkFile();
+        broken.AddressSource.AllowedQualities = [];
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle(e => e.Contains("AllowedQualities"));
+    }
+
+    [Fact]
+    public void AllowedQualities_Unset_DefaultsToTheBuildingPlacedOnes() =>
+        new AddressSourceOptions().Qualities.Should().Equal("A", "B");
+
+    [Fact]
+    public void AllowedQualities_Configured_ReplaceTheDefaultInsteadOfAddingToIt()
+    {
+        // The binder appends a configured list to an initialised one; ["A"] must stay ["A"].
+        var options = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AddressSource:AllowedQualities:0"] = "A" })
+            .Build()
+            .Get<InspireSourceOptions>()!;
+
+        options.AddressSource.Qualities.Should().Equal("A");
     }
 }

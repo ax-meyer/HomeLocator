@@ -52,12 +52,12 @@ public sealed class InspirePropertyImporterTests
     private static InspirePropertyImporter Importer(
         FakeWfsServer server, InspireSourceOptions options, TimeProvider? time = null,
         IPostcodeAreaProvider? postcodeAreas = null, ILoggerFactory? loggerFactory = null,
-        ILogger<InspirePropertyImporter>? logger = null)
+        ILogger<InspirePropertyImporter>? logger = null, string? workDirectory = null)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(InspirePropertyImporter.HttpClientName)).ReturnsLazily(() => new HttpClient(server));
         return new InspirePropertyImporter(logger ?? NullLogger<InspirePropertyImporter>.Instance, factory, options, time, postcodeAreas,
-            loggerFactory: loggerFactory);
+            loggerFactory: loggerFactory, workDirectory: workDirectory);
     }
 
     /// <summary>
@@ -94,10 +94,11 @@ public sealed class InspirePropertyImporterTests
         return provider;
     }
 
-    private static async Task<List<Property>> FetchAllAsync(InspirePropertyImporter importer, ImportRunContext? run = null)
+    private static async Task<List<Property>> FetchAllAsync(
+        InspirePropertyImporter importer, ImportRunContext? run = null, SourceProbe? probe = null)
     {
         var rows = new List<Property>();
-        await foreach (var row in importer.FetchAsync(Probe, run ?? new ImportRunContext(1, "test"), TestContext.Current.CancellationToken))
+        await foreach (var row in importer.FetchAsync(probe ?? Probe, run ?? new ImportRunContext(1, "test"), TestContext.Current.CancellationToken))
             rows.Add(row);
         return rows;
     }
@@ -590,6 +591,14 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
+    public async Task FetchAsync_SomeoneElsesProbe_IsRejected()
+    {
+        var act = () => FetchAllAsync(Importer(GridServer(1), Options()), probe: new SourceProbe("1:1", FingerprintKind.Approximate));
+
+        await act.Should().ThrowAsync<ArgumentException>().WithMessage("*Expected the probe of InspirePropertyImporter*");
+    }
+
+    [Fact]
     public async Task ProbeAsync_UnknownFeatureCount_Fails()
     {
         var server = GridServer(2);
@@ -876,5 +885,99 @@ public sealed class InspirePropertyImporterTests
 
         probe.Fingerprint.Should().Be("4:4");
         server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
+    }
+
+    // ── Addresses from a Hauskoordinaten file (Baden-Württemberg) ────────────
+
+    private const string HkUrl = "http://fake/hk/hk_bw.zip";
+
+    /// <summary>
+    /// The grid server's parcels, with its addresses served as a Hauskoordinaten file instead
+    /// of from the address WFS — plus the given extra rows.
+    /// </summary>
+    private static (FakeWfsServer Server, InspireSourceOptions Options) HkSource(int n, params string[] extraRows)
+    {
+        var server = GridServer(n);
+        var zip = HkFiles.Zip((HkFiles.Member, HkFiles.Text(server.Addresses.Select(a => HkFiles.Row(a.X, a.Y, a.Street, a.Hnr)).Concat(extraRows))));
+        server.Interceptor = (uri, _) => uri.ToString() == HkUrl ? HkFiles.Response(zip) : null;
+        var options = Options(o => o.AddressSource = new AddressSourceOptions
+        {
+            Type = AddressSourceType.HkFile,
+            Url = HkUrl,
+            Member = HkFiles.Member,
+        });
+        return (server, options);
+    }
+
+    [Fact]
+    public async Task FetchAsync_HkFile_JoinsTheFilesAddressesToTheWfsParcels()
+    {
+        var (server, options) = HkSource(3, HkFiles.Row(25, 25, "Distr. Am Ottersberg", "86188851", qua: "C"));
+        var workDirectory = Path.Combine(Path.GetTempPath(), $"hk-importer-tests-{Guid.NewGuid():N}");
+        var importer = Importer(server, options, workDirectory: workDirectory);
+
+        var rows = await FetchAllAsync(importer, probe: await importer.ProbeAsync(TestContext.Current.CancellationToken));
+
+        rows.Should().HaveCount(9, "the quality C row is dropped");
+        rows.Single(r => r.Str == "Straße 01_02").FlaecheAmtl.Should().Be(100 + 1 * 3 + 2);
+        rows.Should().OnlyContain(r => r.Gemeinde == "Testgemeinde" && r.Ort == "Testgemeinde");
+        server.GetFeatureRequests(FakeWfsServer.AddressUrl).Should().BeEmpty("the address WFS isn't asked at all");
+        Directory.GetFiles(workDirectory).Should().BeEmpty("the download is deleted once read");
+        Directory.Delete(workDirectory);
+    }
+
+    [Fact]
+    public async Task FetchAsync_HkFileAddressesOutsideTheBoundingBox_FailTheCompletenessCheck()
+    {
+        // Every kept row counts as expected, so a bounding box too small for the file's data
+        // fails the import instead of silently dropping what lies outside it.
+        var (server, options) = HkSource(2, HkFiles.Row(500, 500, "Außerhalb", "1"), HkFiles.Row(600, 600, "Außerhalb", "2"));
+
+        var importer = Importer(server, options);
+        var probe = await importer.ProbeAsync(TestContext.Current.CancellationToken);
+
+        var act = () => FetchAllAsync(importer, probe: probe);
+
+        await act.Should().ThrowAsync<InspireImportException>().WithMessage("*fetched only 4 of 6 addresses*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_HkFileAsProbed_KeepsTheProbesFingerprint()
+    {
+        var (server, options) = HkSource(2);
+        var importer = Importer(server, options);
+        var run = new ImportRunContext(1, "test");
+
+        await FetchAllAsync(importer, run, await importer.ProbeAsync(TestContext.Current.CancellationToken));
+
+        run.ImportedFingerprint.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FetchAsync_HkFileChangedSinceTheProbe_ReportsWhatWasReallyImported()
+    {
+        // The newer edition is imported; the run must record it, or the next run would compare
+        // against the older one and download this edition again.
+        var (server, options) = HkSource(2);
+        var importer = Importer(server, options);
+        var probe = (InspireProbe)await importer.ProbeAsync(TestContext.Current.CancellationToken);
+        var olderProbe = probe with { Addresses = new FingerprintPart("\"older\"|2026-01-15T07:27:05Z", true) };
+        var run = new ImportRunContext(1, "test");
+
+        await FetchAllAsync(importer, run, olderProbe);
+
+        run.ImportedFingerprint.Should().Be(probe.Fingerprint);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_HkFile_CombinesTheParcelCountWithTheFilesVersion()
+    {
+        var (server, options) = HkSource(2);
+
+        var probe = await Importer(server, options).ProbeAsync(TestContext.Current.CancellationToken);
+
+        probe.Fingerprint.Should().Be("4:\"4607dc5-656a14021d8ec\"|2026-07-15T07:27:05Z");
+        probe.Kind.Should().Be(FingerprintKind.Approximate, "the parcel count from the WFS is only approximate");
+        probe.Should().BeOfType<InspireProbe>().Which.Addresses.IsExact.Should().BeTrue("the file's own version is exact");
     }
 }

@@ -18,7 +18,7 @@ public sealed partial class InspireWfsAddressProvider(
     public async Task<FingerprintPart> ProbeAsync(CancellationToken ct) =>
         FingerprintPart.FromCount(await wfs.GetHitsAsync(ct), "address");
 
-    public async Task<ITileAddresses> LoadAsync(CancellationToken ct)
+    public async Task<ITileAddresses> LoadAsync(FingerprintPart probed, CancellationToken ct)
     {
         var expected = await RequireCountAsync(wfs, options, ct);
         var pageLimit = await wfs.GetPageLimitAsync(ct);

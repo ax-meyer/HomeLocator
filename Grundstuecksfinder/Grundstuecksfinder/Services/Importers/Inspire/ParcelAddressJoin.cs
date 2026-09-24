@@ -42,17 +42,25 @@ public sealed partial class ParcelAddressJoin(
 
     private string Source => options.Source;
 
-    /// <summary>
-    /// Streams the joined rows and throws once at the end if a check fails. Tiles given up on
-    /// are reported to <paramref name="run"/> before the stream ends.
-    /// </summary>
-    public async IAsyncEnumerable<Property> RunAsync(ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
+    /// <summary>Streams the joined rows; throws once at the end if a check fails.</summary>
+    /// <param name="probe">This source's probe from the run being imported.</param>
+    /// <param name="run">
+    /// Receives the tiles given up on, and — when the address side loaded another version than
+    /// the probe saw — the fingerprint of what is really imported, both before the stream ends.
+    /// </param>
+    /// <param name="ct">Cancels the whole run.</param>
+    public async IAsyncEnumerable<Property> RunAsync(
+        InspireProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
     {
         var parcelLimit = await parcels.GetPageLimitAsync(ct);
         // Loaded before the addresses and the (long) tile loop, so a missing area file fails
         // the import right away.
         var postcodes = await LoadPostcodeAreasAsync(ct);
-        var tileAddresses = await addresses.LoadAsync(ct);
+        var tileAddresses = await addresses.LoadAsync(probe.Addresses, ct);
+        // Recorded on the run instead of the probe's fingerprint, so the next run compares with
+        // the edition actually served rather than importing it a second time.
+        if (tileAddresses.Loaded is { } loaded && loaded != probe.Addresses)
+            run.ReportFingerprint(InspireProbe.Combine(probe.Parcels, loaded).Fingerprint);
         var plzStats = new PlzFillStats();
 
         // A tile may carry its parcels along: when only the address page of a tile was full, its
