@@ -10,6 +10,12 @@ public sealed class RefreshOptions
 {
     public const string SectionName = "Import:Refresh";
 
+    /// <summary>
+    /// Upper bound for either age, in days: ten years is "never" for this data, and anything far
+    /// larger would overflow <see cref="TimeSpan"/> at startup instead of failing validation.
+    /// </summary>
+    public const double MaxDays = 3650;
+
     /// <summary>Default <see cref="RefreshPolicy.MinAge"/>, in days.</summary>
     public double MinAgeDays { get; set; } = RefreshPolicy.Default.MinAge.TotalDays;
 
@@ -51,17 +57,19 @@ public sealed class RefreshOptions
 
     private static void ValidatePolicy(string name, double minAgeDays, double maxAgeDays, List<string> errors)
     {
-        if (!(minAgeDays >= 0))
-            errors.Add($"{name}: MinAgeDays must not be negative.");
-        else if (!(maxAgeDays >= minAgeDays))
+        if (!(minAgeDays is >= 0 and <= MaxDays))
+            errors.Add(string.Create(CultureInfo.InvariantCulture, $"{name}: MinAgeDays must be between 0 and {MaxDays}."));
+        else if (!(maxAgeDays is >= 0 and <= MaxDays))
+            errors.Add(string.Create(CultureInfo.InvariantCulture, $"{name}: MaxAgeDays must be between 0 and {MaxDays}."));
+        else if (maxAgeDays < minAgeDays)
             errors.Add(string.Create(CultureInfo.InvariantCulture,
                 $"{name}: MaxAgeDays ({maxAgeDays}) must be at least MinAgeDays ({minAgeDays})."));
     }
 }
 
 /// <summary>
-/// A source's own "Refresh" section, e.g. "Import:Nrw:Refresh" or an INSPIRE source's
-/// "Refresh"; an unset value falls back to <see cref="RefreshOptions"/>.
+/// An INSPIRE source's own "Refresh" section; an unset value falls back to
+/// <see cref="RefreshOptions"/>. NRW has none: its fingerprint is Exact, so ages never apply.
 /// </summary>
 public sealed class RefreshOverride
 {

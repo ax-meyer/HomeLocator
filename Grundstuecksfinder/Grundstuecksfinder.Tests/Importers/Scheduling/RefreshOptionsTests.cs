@@ -50,6 +50,28 @@ public sealed class RefreshOptionsTests
     {
         var overrides = new Dictionary<string, RefreshOverride?> { ["bw"] = new() { MinAgeDays = -1 } };
 
-        new RefreshOptions().Validate(overrides).Should().Equal("bw: Refresh: MinAgeDays must not be negative.");
+        new RefreshOptions().Validate(overrides).Should().Equal("bw: Refresh: MinAgeDays must be between 0 and 3650.");
+    }
+
+    [Theory]
+    [InlineData(30, 1e10, "Import:Refresh: MaxAgeDays must be between 0 and 3650.")]
+    [InlineData(1e10, 1e10, "Import:Refresh: MinAgeDays must be between 0 and 3650.")]
+    [InlineData(double.NaN, 90, "Import:Refresh: MinAgeDays must be between 0 and 3650.")]
+    [InlineData(30, double.PositiveInfinity, "Import:Refresh: MaxAgeDays must be between 0 and 3650.")]
+    public void Validate_AgesTooLargeForATimeSpan_AreRejected(double minAgeDays, double maxAgeDays, string expected)
+    {
+        // Such values would otherwise crash startup in TimeSpan.FromDays instead of failing validation.
+        var options = new RefreshOptions { MinAgeDays = minAgeDays, MaxAgeDays = maxAgeDays };
+
+        options.Validate(NoOverrides).Should().Equal(expected);
+    }
+
+    [Fact]
+    public void Validate_TenYears_IsTheLargestAge()
+    {
+        var options = new RefreshOptions { MinAgeDays = 3650, MaxAgeDays = 3650 };
+
+        options.Validate(NoOverrides).Should().BeEmpty();
+        options.PolicyFor(null).MaxAge.Should().Be(TimeSpan.FromDays(3650));
     }
 }
