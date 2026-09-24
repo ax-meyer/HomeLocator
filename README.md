@@ -51,6 +51,22 @@ in `docker-compose.yml` if you don't use it).
    service. On first startup it imports every enabled source, one after another (this takes
    hours for the large states); after that the import check runs nightly at 03:00 UTC.
 
+### Upgrading from a version with `ImportLogs`
+
+The import history was redesigned and all database migrations were squashed into one fresh
+`InitialCreate`. On a database created by an earlier version it fails at startup with
+`relation "..." already exists`. **Drop the database before deploying** this version, e.g.:
+
+```bash
+docker compose stop app
+docker compose exec db dropdb -U homelocator homelocator
+docker compose exec db createdb -U homelocator homelocator
+docker compose up -d app
+```
+
+The first start then imports all sources back to back, which takes hours; the site shows no
+data until the first source completes.
+
 ### Local development
 
 `docker-compose.dev.yml` only starts a local Postgres instance (hardcoded dev password, no
@@ -74,16 +90,19 @@ Every run (at startup and nightly at 03:00 UTC) probes each enabled source cheap
 decides what to import:
 
 - A source without imported data is imported right away; after the database is dropped, all
-  sources are imported back to back in the first run.
+  sources are imported back to back in the first run. Sources whose previous attempt failed (or
+  was cut short by a crash) go after the others.
 - A source with an **exact** fingerprint (the publisher's own version marker, e.g. NRW's manifest
   timestamp) is re-imported as soon as it changes, and an unchanged file is never downloaded
   again.
 - A source with an **approximate** fingerprint (INSPIRE WFS hit counts, which drift daily in
   active states) is re-imported when it changed and the data is at least `MinAgeDays` old, or
   in any case once the data is `MaxAgeDays` old.
-- Of those re-imports, at most `MaxRoutineImportsPerRun` run per night, most overdue first, so
-  the multi-hour states are spread over several nights. A failed import is simply due again in
-  the next run; the previous data stays in place meanwhile.
+- Such re-imports only happen in the nightly run, at most `MaxRoutineImportsPerRun` of them,
+  most overdue first, so the multi-hour states are spread over several nights; the run at
+  startup only does first imports. A failed import is simply due again in the next run; the
+  previous data stays in place meanwhile. Ages count from when an import started.
+- Only one instance imports at a time (a database-wide lock); another one skips its run.
 
 ```json
 "Import": {
@@ -92,8 +111,11 @@ decides what to import:
 }
 ```
 
-The per-source `Refresh` section is optional and overrides the defaults for that source only.
-Broken values fail startup.
+The per-source `Refresh` section is optional and overrides the defaults for that source only
+(ages up to 3650 days). Broken values fail startup.
+
+Downloads (NRW's ~1 GB ZIP and similar files) go to `Import:WorkDirectory`, by default a
+`grundstuecksfinder` directory under the system temp directory, and are deleted once read.
 
 ### Adding another region's source
 
