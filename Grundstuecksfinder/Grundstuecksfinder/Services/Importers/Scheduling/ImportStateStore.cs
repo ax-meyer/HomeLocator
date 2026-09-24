@@ -62,8 +62,9 @@ public sealed class ImportStateStore(AppDbContext db)
     }
 
     /// <summary>
-    /// Records the start of an import; the ID is what the run's rows and its completion are
-    /// recorded against. It stays unfinished until the swap completes it or <see cref="FailRunAsync"/>.
+    /// Records the start of an import with the probe's fingerprint; the ID is what the run's rows
+    /// and its completion are recorded against. It stays unfinished until the swap completes it
+    /// or <see cref="FailRunAsync"/>.
     /// </summary>
     public async Task<int> StartRunAsync(PlannedImport planned, DateTimeOffset at, CancellationToken ct)
     {
@@ -80,12 +81,20 @@ public sealed class ImportStateStore(AppDbContext db)
         return run.Id;
     }
 
-    public async Task FailRunAsync(int runId, DateTimeOffset at, string error, CancellationToken ct)
+    /// <summary>
+    /// Records the run as failed, with the fingerprint its fetch reported having got to (see
+    /// <see cref="ImportRunContext.ReportFingerprint"/>) if any.
+    /// </summary>
+    public async Task FailRunAsync(ImportRunContext run, DateTimeOffset at, string error, CancellationToken ct)
     {
         var truncated = Truncate(error);
+        var fingerprint = run.ImportedFingerprint;
         await db.ImportRuns
-            .Where(r => r.Id == runId)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.FailedAt, at).SetProperty(r => r.Error, truncated), ct);
+            .Where(r => r.Id == run.RunId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.FailedAt, at)
+                .SetProperty(r => r.Error, truncated)
+                .SetProperty(r => r.Fingerprint, r => fingerprint ?? r.Fingerprint), ct);
     }
 
     /// <summary>Removes a run that never got to import anything, so it isn't taken for an attempt.</summary>

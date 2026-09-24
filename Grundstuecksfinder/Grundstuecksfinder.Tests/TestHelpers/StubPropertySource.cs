@@ -18,6 +18,10 @@ public sealed class StubPropertySource(string id, string fingerprint, Fingerprin
     public int SkippedParts { get; init; }
     public Exception? ProbeFailure { get; set; }
     public Action? DuringFetch { get; set; }
+
+    /// <summary>Reported as what the fetch really imported, like a file located anew at download time.</summary>
+    public string? ImportedFingerprint { get; set; }
+
     public int Probes { get; private set; }
     public int Fetches { get; private set; }
     public List<SourceProbe> FetchedProbes { get; } = [];
@@ -35,6 +39,9 @@ public sealed class StubPropertySource(string id, string fingerprint, Fingerprin
         Fetches++;
         FetchedProbes.Add(probe);
         DuringFetch?.Invoke();
+        // Known once the file is located, before any row: also recorded if the fetch then fails.
+        if (ImportedFingerprint is not null)
+            run.ReportFingerprint(ImportedFingerprint);
         for (var i = 0; i < RowCount; i++)
         {
             ct.ThrowIfCancellationRequested();

@@ -340,6 +340,31 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FingerprintReportedByTheFetch_IsWhatTheRunRecordsAndLaterRunsCompareWith()
+    {
+        // The file was located again at download time and turned out a newer edition.
+        var source = new StubPropertySource("he", "2026-01") { ImportedFingerprint = "2026-04" };
+        await RunAsync(source);
+
+        (await StateAsync("he")).ServedRun!.Fingerprint.Should().Be("2026-04");
+
+        source.Fingerprint = "2026-04";
+        source.ImportedFingerprint = null;
+        AdvanceDays(1);
+        await RunAsync(source);
+
+        source.Fetches.Should().Be(1, "the edition the probe now reports is the one already served");
+    }
+
+    [Fact]
+    public async Task FailedFetch_RecordsTheFingerprintItReported()
+    {
+        await RunAsync(new StubPropertySource("he", "2026-01") { ImportedFingerprint = "2026-04", RowCount = 2, FailAfter = 1 });
+
+        (await RunsAsync("he")).Should().ContainSingle().Which.Fingerprint.Should().Be("2026-04");
+    }
+
+    [Fact]
     public async Task FetchGetsTheProbeOfTheSameRun()
     {
         var source = new StubPropertySource("nrw", "file-2026.zip");

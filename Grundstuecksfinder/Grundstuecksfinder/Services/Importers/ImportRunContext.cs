@@ -26,4 +26,22 @@ public sealed class ImportRunContext(int runId, string source)
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         SkippedParts += count;
     }
+
+    /// <summary>
+    /// The fingerprint of the data the fetch actually imported, where it differs from the probe's;
+    /// null means the probe's. See <see cref="ReportFingerprint"/>.
+    /// </summary>
+    public string? ImportedFingerprint { get; private set; }
+
+    /// <summary>
+    /// Reports what the fetch really imported, for a source whose upstream can move between the
+    /// probe and the fetch (a file located again at download time may be a newer edition). The
+    /// run is recorded with this fingerprint instead of the probe's, so the next run compares
+    /// against the data actually served and doesn't import that edition a second time.
+    /// </summary>
+    public void ReportFingerprint(string fingerprint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+        ImportedFingerprint = fingerprint;
+    }
 }

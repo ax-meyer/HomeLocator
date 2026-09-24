@@ -120,7 +120,7 @@ public sealed partial class ImportRunner(
         {
             LogImportFailed(logger, ex, source.Id);
             // Reported by the import health check until a later run of the source succeeds.
-            await store.FailRunAsync(runId, time.GetUtcNow(), ex.Message, ct);
+            await store.FailRunAsync(run, time.GetUtcNow(), ex.Message, ct);
         }
     }
 

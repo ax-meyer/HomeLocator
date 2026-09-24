@@ -76,6 +76,27 @@ public sealed class PropertyBulkWriterTests(PostgresFixture fixture) : IAsyncLif
     }
 
     [Fact]
+    public async Task WriteAsync_FingerprintReportedByTheFetch_IsRecordedInsteadOfTheProbes()
+    {
+        var run = await NewRunAsync("probed");
+        run.ReportFingerprint("imported");
+
+        await new PropertyBulkWriter(fixture.DataSource).WriteAsync(run, Rows(1), TestContext.Current.CancellationToken);
+
+        (await StateAsync(run.RunId)).Run.Fingerprint.Should().Be("imported");
+    }
+
+    [Fact]
+    public async Task WriteAsync_NothingReported_KeepsTheProbesFingerprint()
+    {
+        var run = await NewRunAsync("probed");
+
+        await new PropertyBulkWriter(fixture.DataSource).WriteAsync(run, Rows(1), TestContext.Current.CancellationToken);
+
+        (await StateAsync(run.RunId)).Run.Fingerprint.Should().Be("probed");
+    }
+
+    [Fact]
     public async Task WriteAsync_NewerImport_ReplacesTheServedRun()
     {
         var writer = new PropertyBulkWriter(fixture.DataSource);

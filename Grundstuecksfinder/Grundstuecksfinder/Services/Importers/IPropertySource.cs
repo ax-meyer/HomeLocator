@@ -26,9 +26,9 @@ public interface IPropertySource
 
     /// <summary>
     /// Fetches and normalizes what <paramref name="probe"/> (this source's own probe from the
-    /// same run) found into Property rows, streamed. Parts tolerated missing are reported to
-    /// <paramref name="run"/> before the stream ends; anything worse must throw, so the previous
-    /// rows stay.
+    /// same run) found into Property rows, streamed. Parts tolerated missing, and a fingerprint
+    /// that differs from the probe's, are reported to <paramref name="run"/> before the stream
+    /// ends; anything worse must throw, so the previous rows stay.
     /// </summary>
     IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, CancellationToken ct);
 }

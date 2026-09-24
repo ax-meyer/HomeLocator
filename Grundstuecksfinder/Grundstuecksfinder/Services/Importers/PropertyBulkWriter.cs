@@ -152,16 +152,20 @@ public partial class PropertyBulkWriter(
 
         // In the same transaction, so swapped data is never recorded as a failed import (which
         // would re-import it the next night), and a completed, served run always has its data.
-        // The fetch has run to its end, so the parts it skipped are all known by now.
+        // The fetch has run to its end, so the parts it skipped and the version it really
+        // imported are all known by now.
         var completedAt = _time.GetUtcNow();
         await using (var complete = new NpgsqlCommand("""
-            UPDATE "ImportRuns" SET "RecordCount" = $2, "SkippedParts" = $3, "CompletedAt" = $4 WHERE "Id" = $1
+            UPDATE "ImportRuns" SET "RecordCount" = $2, "SkippedParts" = $3, "CompletedAt" = $4,
+                "Fingerprint" = COALESCE($5, "Fingerprint")
+            WHERE "Id" = $1
             """, conn, tx))
         {
             complete.Parameters.AddWithValue(run.RunId);
             complete.Parameters.AddWithValue(count);
             complete.Parameters.AddWithValue(run.SkippedParts);
             complete.Parameters.AddWithValue(completedAt);
+            complete.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)run.ImportedFingerprint ?? DBNull.Value });
             await complete.ExecuteNonQueryAsync(ct);
         }
 
