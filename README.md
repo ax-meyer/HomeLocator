@@ -6,8 +6,9 @@ Postgres, and lets you search parcels by postal code, municipality, and area (m�
 Blazor Server web UI — with geocoded map markers via OpenStreetMap/Nominatim.
 
 Currently ships with sources for **North Rhine-Westphalia (NRW)** and the states that publish
-their cadastre as separate INSPIRE parcel and address services (configured under
-`Import:Inspire:Sources`). The import pipeline is built around a pluggable `IPropertySource`
+parcels and addresses separately — parcels as an INSPIRE service, addresses as an INSPIRE
+service or a statewide file — joined by location (configured under `Import:Inspire:Sources`,
+see [INSPIRE states](#inspire-states)). The import pipeline is built around a pluggable `IPropertySource`
 interface, so adding another Bundesland (or country) is a matter of writing one source class —
 no changes to the shared import, scheduling, storage, or search code required.
 
@@ -96,7 +97,7 @@ decides what to import:
   timestamp) is re-imported as soon as it changes, and an unchanged file is never downloaded
   again.
 - A source with an **approximate** fingerprint (INSPIRE WFS hit counts, which drift daily in
-  active states) is re-imported when it changed and the data is at least `MinAgeDays` old, or
+  active states — every INSPIRE state, since its parcels always come from a WFS) is re-imported when it changed and the data is at least `MinAgeDays` old, or
   in any case once the data is `MaxAgeDays` old.
 - Such re-imports only happen in the nightly run, at most `MaxRoutineImportsPerRun` of them,
   most overdue first, so the multi-hour states are spread over several nights; the run at
@@ -116,6 +117,48 @@ The per-source `Refresh` section is optional and overrides the defaults for that
 
 Downloads (NRW's ~1 GB ZIP and similar files) go to `Import:WorkDirectory`, by default a
 `grundstuecksfinder` directory under the system temp directory, and are deleted once read.
+
+### INSPIRE states
+
+These states publish no dataset carrying both an address and a parcel's official area, so each
+import joins two: parcels (official area + outline) from the state's INSPIRE `cp:CadastralParcel`
+WFS, fetched tile by tile, and addresses from whichever of the state's address datasets is usable
+and fastest, each address matched to the parcel containing it. `AddressSource.Type` picks it:
+
+| Type | Addresses from | Used by |
+|---|---|---|
+| `InspireWfs` | the INSPIRE `ad:Address` WFS, per tile alongside the parcels | SH, SN, BB, NI, HE |
+| `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
+| `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
+| `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW |
+
+```json
+{
+  "Source": "bw",
+  "ParcelWfsUrl": "https://owsproxy.lgl-bw.de/owsproxy/wfs/WFS_INSP_BW_Flst_ALKIS",
+  "AddressSource": {
+    "Type": "HkFile",
+    "Url": "https://opengeodata.lgl-bw.de/data/hk/hk_bw.zip",
+    "Locator": "StaticUrl",
+    "Member": "adressen-bw.txt",
+    "AllowedQualities": [ "A", "B" ]
+  },
+  "Crs": "urn:ogc:def:crs:EPSG::25832",
+  "BoundingBox": { "MinX": 370000, "MinY": 5250000, "MaxX": 610000, "MaxY": 5520000 },
+  "FillMissingPlzFromPostcodeAreas": true
+}
+```
+
+A Hauskoordinaten file is found by its `Locator` — `StaticUrl` (a fixed URL, versioned by its
+ETag/Last-Modified) or `HessenDownloadCenter` (the REST listing of a folder in Hessen's download
+center) — so the address part of the fingerprint is the publisher's own version. The parcel part
+is still a WFS hit count, though, so the state as a whole stays **approximate**: its file is
+downloaded again whenever the state is re-imported under its `MinAgeDays`/`MaxAgeDays`, even if
+the file itself hasn't changed. It goes to `Import:WorkDirectory` like every download, is read
+from the ZIP entry named by `Member` (a name, or a pattern with `*`/`?`), and deleted right after.
+Only the qualities in `AllowedQualities` (default A and B) are imported: BW's quality C rows
+carry house numbers made up from their coordinates. Sources without a PLZ get the one of the
+OpenStreetMap postcode area around them (`FillMissingPlzFromPostcodeAreas`).
 
 ### Adding another region's source
 
