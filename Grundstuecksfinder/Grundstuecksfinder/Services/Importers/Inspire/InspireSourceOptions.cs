@@ -77,7 +77,7 @@ public partial class InspireSourceOptions
     public bool UsePostNameAsOrt { get; set; } = true;
 
     /// <summary>
-    /// For sources that publish (almost) no PLZ (BB, HE): an address without one gets the PLZ of
+    /// For sources that publish (almost) no PLZ (BB, NI, BW, HE): an address without one gets the PLZ of
     /// the postcode area containing it (see "Import:PostcodeAreas"). Addresses that do carry a
     /// PLZ keep it; they're only compared with the areas, as a logged plausibility check.
     /// </summary>
