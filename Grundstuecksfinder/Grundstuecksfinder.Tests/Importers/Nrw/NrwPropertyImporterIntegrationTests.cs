@@ -5,12 +5,9 @@ using System.Text.Json;
 using FakeItEasy;
 using Xunit;
 using FluentAssertions;
-using Grundstuecksfinder.Data;
-using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Nrw;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -32,22 +29,15 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    private ImportOrchestrator BuildOrchestrator(FakeHttpMessageHandler handler)
+    private Task RunImportsAsync(FakeHttpMessageHandler handler, CancellationToken ct = default)
     {
         var http = new HttpClient(handler);
         var httpFactory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => httpFactory.CreateClient(A<string>._)).Returns(http);
 
-        var services = new ServiceCollection();
-        services.AddDbContext<AppDbContext>(o => o.UseNpgsql(fixture.ConnectionString));
-        var sp = services.BuildServiceProvider();
-        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
-
         var options = Options.Create(new NrwImporterOptions { ManifestUrl = ManifestUrl, BaseDownloadUrl = BaseDownloadUrl });
         var importer = new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, httpFactory, options);
-        var bulkWriter = new PropertyBulkWriter(fixture.DataSource);
-
-        return new ImportOrchestrator([importer], NullLogger<ImportOrchestrator>.Instance, scopeFactory, bulkWriter);
+        return fixture.RunImportsAsync([importer], ct: ct);
     }
 
     private static byte[] BuildZipWithCsv()
@@ -80,7 +70,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
         });
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_ImportsRowsFromCsv()
+    public async Task RunAsync_ValidData_ImportsRowsFromCsv()
     {
         var handler = new FakeHttpMessageHandler();
         handler.AddRoute(ManifestUrl, () => new HttpResponseMessage(HttpStatusCode.OK)
@@ -94,8 +84,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
                 Content = new ByteArrayContent(BuildZipWithCsv())
             });
 
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(handler, TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
         var properties = await context.Properties.ToListAsync(TestContext.Current.CancellationToken);
@@ -104,7 +93,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_RecordsACompletedRun()
+    public async Task RunAsync_ValidData_RecordsACompletedRun()
     {
         var handler = new FakeHttpMessageHandler();
         handler.AddRoute(ManifestUrl, () => new HttpResponseMessage(HttpStatusCode.OK)
@@ -118,27 +107,26 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
                 Content = new ByteArrayContent(BuildZipWithCsv())
             });
 
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(handler, TestContext.Current.CancellationToken);
 
         await using var context = fixture.CreateContext();
         var run = await context.ImportRuns.FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         run.Should().NotBeNull();
         run!.Source.Should().Be(NrwPropertyImporter.SourceId);
-        run.Fingerprint.Should().Be($"{DatasetName}/{ZipFileName}/{ZipTimestamp}");
+        run.Fingerprint.Should().Be($"{ZipFileName}@{ZipTimestamp}");
         run.RecordCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_AlreadyImported_SkipsImport()
+    public async Task RunAsync_AlreadyImported_SkipsImport()
     {
         // The same version is already being served
         await using (var context = fixture.CreateContext())
         {
             context.SourceStates.Add(ImportSeed.Serving(ImportSeed.Completed(
                 NrwPropertyImporter.SourceId, DateTimeOffset.UtcNow, recordCount: 999,
-                fingerprint: $"{DatasetName}/{ZipFileName}/{ZipTimestamp}")));
+                fingerprint: $"{ZipFileName}@{ZipTimestamp}")));
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
@@ -159,21 +147,21 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
                 };
             });
 
-        var orchestrator = BuildOrchestrator(handler);
-        await orchestrator.CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(handler, TestContext.Current.CancellationToken);
 
         downloadCalled.Should().BeFalse("ZIP should not be downloaded when already imported");
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ManifestFetchFails_DoesNotThrow()
+    public async Task RunAsync_ManifestFetchFails_DoesNotThrow()
     {
         var handler = new FakeHttpMessageHandler();
         handler.AddRoute(ManifestUrl, () => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
 
-        var orchestrator = BuildOrchestrator(handler);
-        var act = () => orchestrator.CheckAndImportAsync();
+        var act = () => RunImportsAsync(handler);
 
         await act.Should().NotThrowAsync();
+        await using var context = fixture.CreateContext();
+        (await context.SourceStates.SingleAsync(TestContext.Current.CancellationToken)).LastProbeError.Should().Contain("503");
     }
 }

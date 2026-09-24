@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Grundstuecksfinder.Services.Importers.Scheduling;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
@@ -20,7 +21,11 @@ public partial class InspireSourceOptions
     /// </summary>
     public bool Enabled { get; set; } = true;
 
-    public string DatasetName { get; set; } = string.Empty;
+    /// <summary>
+    /// This state's own refresh ages; unset values fall back to "Import:Refresh". Its hit-count
+    /// fingerprint is Approximate, so both ages apply (see <see cref="RefreshPolicy"/>).
+    /// </summary>
+    public RefreshOverride? Refresh { get; set; }
 
     /// <summary>Base URL of the cp:CadastralParcel WFS (INSPIRE download service).</summary>
     public string ParcelWfsUrl { get; set; } = string.Empty;
@@ -215,8 +220,6 @@ public partial class InspireSourceOptions
             else if (reservedSources.Contains(s.Source) || !seen.Add(s.Source))
                 errors.Add($"{name}: Source is used twice; each source's import replaces all rows with that Source.");
 
-            if (string.IsNullOrWhiteSpace(s.DatasetName))
-                errors.Add($"{name}: DatasetName is required.");
             if (!IsHttpUrl(s.ParcelWfsUrl))
                 errors.Add($"{name}: ParcelWfsUrl must be an absolute http(s) URL.");
             if (!IsHttpUrl(s.AddressWfsUrl))

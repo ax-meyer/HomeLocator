@@ -10,6 +10,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SourceState> SourceStates => Set<SourceState>();
     public DbSet<DailyTelemetry> DailyTelemetry => Set<DailyTelemetry>();
 
+    /// <summary>
+    /// Each source's latest finished run, where that one failed. A run still going (or cut short
+    /// by a crash or shutdown) has no say yet; the finished one before it does.
+    /// </summary>
+    public IQueryable<ImportRun> LatestRunsIfFailed => ImportRuns.Where(r =>
+        r.FailedAt != null
+        && !ImportRuns.Any(newer => newer.Source == r.Source && newer.Id > r.Id
+                                    && (newer.CompletedAt != null || newer.FailedAt != null)));
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

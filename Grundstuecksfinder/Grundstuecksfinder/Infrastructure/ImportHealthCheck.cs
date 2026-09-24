@@ -29,12 +29,8 @@ public class ImportHealthCheck(IServiceScopeFactory scopeFactory, DisabledSource
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // A run still going (or cut short by a crash) has no say; the finished one before it has.
-        var failed = await db.ImportRuns
-            .Where(r => r.FailedAt != null
-                        && !disabledSources.Names.Contains(r.Source)
-                        && !db.ImportRuns.Any(newer => newer.Source == r.Source && newer.Id > r.Id
-                                                       && (newer.CompletedAt != null || newer.FailedAt != null)))
+        var failed = await db.LatestRunsIfFailed
+            .Where(r => !disabledSources.Names.Contains(r.Source))
             .OrderBy(r => r.Source)
             .Select(r => new { r.Source, r.Error })
             .ToListAsync(cancellationToken);

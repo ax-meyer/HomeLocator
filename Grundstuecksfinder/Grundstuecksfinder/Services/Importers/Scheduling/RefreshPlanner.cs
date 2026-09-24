@@ -3,7 +3,7 @@ using Grundstuecksfinder.Models;
 namespace Grundstuecksfinder.Services.Importers.Scheduling;
 
 /// <summary>Everything the planner knows about one source in this run.</summary>
-/// <param name="Source">The source's stable slug, e.g. "bw".</param>
+/// <param name="Source">The source's <see cref="IPropertySource.Id"/>.</param>
 /// <param name="Policy">The source's effective refresh policy.</param>
 /// <param name="Probe">This run's probe result; null if the probe failed.</param>
 /// <param name="Served">The import whose rows are served; null if there is none yet.</param>

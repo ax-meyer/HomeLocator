@@ -6,6 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers.Postcodes;
+using Grundstuecksfinder.Services.Importers.Scheduling;
 using NetTopologySuite.Geometries;
 using Polly;
 using Polly.CircuitBreaker;
@@ -25,8 +26,8 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// <remarks>
 /// <para>
 /// Tiling over the state's bounding box happens inside <see cref="FetchAsync"/> only to bound
-/// memory — <see cref="DiscoverAsync"/> always returns a single whole-state candidate, because
-/// <see cref="PropertyBulkWriter"/> replaces all of a source's rows per write.
+/// memory — a state is one source with one fingerprint, because <see cref="PropertyBulkWriter"/>
+/// replaces all of a source's rows per write.
 /// </para>
 /// <para>
 /// No startIndex paging: servers ignore it (SH), cap page sizes below what was asked (HE, BW),
@@ -54,7 +55,8 @@ public partial class InspirePropertyImporter(
     TimeProvider? timeProvider = null,
     IPostcodeAreaProvider? postcodeAreas = null,
     NameCatalogLoader? nameCatalogLoader = null,
-    ILoggerFactory? loggerFactory = null) : IPropertyImporter
+    ILoggerFactory? loggerFactory = null,
+    RefreshPolicy? refreshPolicy = null) : IPropertySource
 {
     /// <summary>Named HttpClient for the WFS requests; per-request limits come from the options.</summary>
     public const string HttpClientName = "Inspire";
@@ -71,54 +73,43 @@ public partial class InspirePropertyImporter(
     /// </summary>
     private ResiliencePipeline? _pipeline;
 
-    public string Source => options.Source;
+    public string Id => options.Source;
+
+    public RefreshPolicy RefreshPolicy { get; } = refreshPolicy ?? RefreshPolicy.Default;
+
+    private string Source => options.Source;
 
     /// <summary>
-    /// Tiles the last <see cref="FetchAsync"/> gave up on. Written once its enumeration has run
-    /// to the end, so the orchestrator can record a tolerated hole on the ImportRun.
+    /// The parcel and address hit counts. They move with most upstream changes but also drift
+    /// daily in active states, so the fingerprint is only Approximate: the refresh policy decides
+    /// when a change is worth a re-import, and forces one now and then for the changes counts
+    /// miss (renamings, corrected areas, equal adds and removes).
     /// </summary>
-    public int SkippedTiles { get; private set; }
-
-    public async Task<IReadOnlyList<ImportCandidate>> DiscoverAsync(CancellationToken ct)
+    public async Task<SourceProbe> ProbeAsync(CancellationToken ct)
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
 
-        long? parcelHits;
-        long? addressHits;
-        try
-        {
-            parcelHits = await GetHitsAsync(http, options.ParcelWfsUrl, ParcelType, ct);
-            addressHits = options.UseOgcApiAddresses
-                ? await GetOgcApiHitsAsync(http, options.AddressWfsUrl, ct)
-                : await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct);
-        }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
-        {
-            LogHitsCheckFailed(logger, ex, Source);
-            return [];
-        }
+        var parcelHits = await GetHitsAsync(http, options.ParcelWfsUrl, ParcelType, ct);
+        var addressHits = options.UseOgcApiAddresses
+            ? await GetOgcApiHitsAsync(http, options.AddressWfsUrl, ct)
+            : await GetHitsAsync(http, options.AddressWfsUrl, AddressType, ct);
 
         // Without a total there's nothing to check the import's completeness against.
         if (parcelHits is null || addressHits is null)
-        {
-            LogHitsUnknown(logger, Source);
-            return [];
-        }
+            throw new InspireImportException(
+                $"{Source}: the services don't report feature counts (numberMatched), so an import's completeness can't be checked.");
 
         if (parcelHits == 0 || addressHits == 0)
-        {
-            LogNoFeatures(logger, Source);
-            return [];
-        }
+            throw new InspireImportException($"{Source}: the services reported zero parcels or addresses.");
 
-        // The counts catch most upstream changes; the month forces a re-import at least monthly
-        // for the ones they don't (renamings, corrected areas, equal adds and removes).
-        var month = _time.GetUtcNow().ToString("yyyy-MM", CultureInfo.InvariantCulture);
-        var versionTimestamp = FormattableString.Invariant($"{parcelHits}:{addressHits}:{month}");
-        return [new ImportCandidate(options.DatasetName, "statewide", versionTimestamp)];
+        return new SourceProbe(FormattableString.Invariant($"{parcelHits}:{addressHits}"), FingerprintKind.Approximate);
     }
 
-    public async IAsyncEnumerable<Property> FetchAsync(ImportCandidate candidate, [EnumeratorCancellation] CancellationToken ct)
+    /// <summary>
+    /// Fetches the whole state. The probe isn't needed: its counts are re-read here as the
+    /// completeness check's expectation. Tiles given up on are reported to <paramref name="run"/>.
+    /// </summary>
+    public async IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
 
@@ -153,7 +144,6 @@ public partial class InspirePropertyImporter(
         long unmatchedCount = 0;
         var processedTiles = 0;
         var failedTiles = new FailedTileBudget(logger, Source, options.MaxFailedTiles);
-        SkippedTiles = 0;
         while (pending.TryPop(out var item))
         {
             ct.ThrowIfCancellationRequested();
@@ -245,7 +235,7 @@ public partial class InspirePropertyImporter(
             }
         }
 
-        SkippedTiles = failedTiles.Count;
+        run.AddSkippedParts(failedTiles.Count);
         var completeness = expectedAddresses == 0 ? 1 : (double)addressCount / expectedAddresses;
         LogFetchSummary(logger, Source, addressCount, expectedAddresses, completeness, unmatchedCount, failedTiles.Count);
         if (postcodes is not null)
@@ -704,15 +694,6 @@ public partial class InspirePropertyImporter(
         /// <summary>Closed, like the WFS bbox filter: what a request for this tile would return.</summary>
         public bool Intersects(Envelope e) => e.MinX <= MaxX && e.MaxX >= MinX && e.MinY <= MaxY && e.MaxY >= MinY;
     }
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to check feature counts for {Source}")]
-    private static partial void LogHitsCheckFailed(ILogger logger, Exception exception, string source);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "{Source} doesn't report feature counts (numberMatched), so an import's completeness can't be checked; skipping")]
-    private static partial void LogHitsUnknown(ILogger logger, string source);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source} reported zero parcels or addresses, skipping")]
-    private static partial void LogNoFeatures(ILogger logger, string source);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: paged {Fetched} of {Expected} addresses in one pass, before joining them to parcels")]
     private static partial void LogPagedAddresses(ILogger logger, string source, int fetched, long expected);

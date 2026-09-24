@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using Grundstuecksfinder.Models;
+using Grundstuecksfinder.Services.Importers.Scheduling;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
@@ -8,12 +10,15 @@ using Polly.Timeout;
 
 namespace Grundstuecksfinder.Services.Importers.Nrw;
 
-/// <summary>Imports NRW's open-data "Grundsteuer" dataset: a JSON manifest pointing at a ZIP of semicolon-CSVs.</summary>
+/// <summary>
+/// Imports NRW's open-data "Grundsteuer" dataset: a JSON manifest listing one ZIP of
+/// semicolon-CSVs per yearly edition, each with its publication timestamp.
+/// </summary>
 public partial class NrwPropertyImporter(
     ILogger<NrwPropertyImporter> logger,
     IHttpClientFactory httpClientFactory,
     IOptions<NrwImporterOptions> options,
-    TimeProvider? timeProvider = null) : IPropertyImporter
+    TimeProvider? timeProvider = null) : IPropertySource
 {
     public const string SourceId = "nrw";
 
@@ -23,7 +28,13 @@ public partial class NrwPropertyImporter(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private ResiliencePipeline? _pipeline;
 
-    public string Source => SourceId;
+    public string Id => SourceId;
+
+    /// <summary>
+    /// Never consulted, so not configurable: the manifest's timestamps are an Exact fingerprint,
+    /// and Exact sources are imported when their version changes, however old their data.
+    /// </summary>
+    public RefreshPolicy RefreshPolicy => RefreshPolicy.Default;
 
     // CSV columns (0-indexed): id=0, str=4, hnr=5, hnr_zus=6, plz=7, ort=8, gemeinde=9, flaeche_amtl=16
     public static readonly CsvColumnMap ColumnMap = new(
@@ -37,43 +48,32 @@ public partial class NrwPropertyImporter(
         GemeindeIndex: 9,
         FlaecheAmtlIndex: 16);
 
-    public async Task<IReadOnlyList<ImportCandidate>> DiscoverAsync(CancellationToken ct)
+    /// <summary>
+    /// The newest ZIP in the manifest, fingerprinted by its name and publication timestamp — an
+    /// Exact fingerprint, so an edition is downloaded once and never again. The manifest keeps
+    /// every year's edition (all in one dataset today); only the newest is imported, since every
+    /// import replaces all of NRW's rows.
+    /// </summary>
+    public async Task<SourceProbe> ProbeAsync(CancellationToken ct)
     {
         var http = httpClientFactory.CreateClient(HttpClientName);
-        GrundsteuerManifest? manifest;
-        try
-        {
-            manifest = await Pipeline.ExecuteAsync(
-                async token => await http.GetFromJsonAsync<GrundsteuerManifest>(options.Value.ManifestUrl, token), ct);
-        }
-        catch (Exception ex)
-        {
-            LogManifestFetchFailed(logger, ex, options.Value.ManifestUrl);
-            return [];
-        }
+        var manifest = await Pipeline.ExecuteAsync(
+            async token => await http.GetFromJsonAsync<GrundsteuerManifest>(options.Value.ManifestUrl, token), ct);
 
-        if (manifest?.Datasets is not { Count: > 0 })
-        {
-            LogManifestEmpty(logger);
-            return [];
-        }
-
-        var candidates = manifest.Datasets
-            .Select(d => (Dataset: d, ZipFile: d.Files.MaxBy(f => f.Timestamp)))
-            .Where(x => x.ZipFile is not null)
-            .Select(x => new ImportCandidate(x.Dataset.Name, x.ZipFile!.Name, x.ZipFile.Timestamp.ToString("s")))
-            .ToList();
-
-        if (candidates.Count == 0)
-            LogManifestNoZip(logger);
-
-        return candidates;
+        var newest = manifest?.Datasets.SelectMany(d => d.Files).MaxBy(f => f.Timestamp)
+            ?? throw new InvalidDataException($"The NRW manifest at {options.Value.ManifestUrl} lists no files.");
+        var published = newest.Timestamp.ToString("s", CultureInfo.InvariantCulture);
+        return new NrwProbe(newest.Name, $"{newest.Name}@{published}");
     }
 
-    public async IAsyncEnumerable<Property> FetchAsync(ImportCandidate candidate, [EnumeratorCancellation] CancellationToken ct)
+    /// <summary>Downloads and parses exactly the ZIP <paramref name="probe"/> found.</summary>
+    public async IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
     {
+        if (probe is not NrwProbe nrwProbe)
+            throw new ArgumentException($"Expected the probe of {nameof(NrwPropertyImporter)}, got {probe.GetType().Name}.", nameof(probe));
+
         var http = httpClientFactory.CreateClient(HttpClientName);
-        var url = $"{options.Value.BaseDownloadUrl.TrimEnd('/')}/{candidate.FileName}";
+        var url = $"{options.Value.BaseDownloadUrl.TrimEnd('/')}/{nrwProbe.FileName}";
 
         // The ZIP can be several GB – download to a temp file first so ZipArchive can seek.
         // Ensure the host has at least 10 GB of free disk space.
@@ -147,15 +147,6 @@ public partial class NrwPropertyImporter(
     [LoggerMessage(Level = LogLevel.Warning, Message = "nrw: request failed (attempt {Attempt} of {MaxAttempts}), retrying in {Delay}")]
     private static partial void LogRetrying(ILogger logger, Exception exception, int attempt, int maxAttempts, TimeSpan delay);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to fetch manifest from {Url}")]
-    private static partial void LogManifestFetchFailed(ILogger logger, Exception exception, string url);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Manifest contained no datasets")]
-    private static partial void LogManifestEmpty(ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Manifest contained no datasets with a zip file")]
-    private static partial void LogManifestNoZip(ILogger logger);
-
     [LoggerMessage(Level = LogLevel.Information, Message = "Downloading {Url}...")]
     private static partial void LogDownloading(ILogger logger, string url);
 
@@ -165,3 +156,6 @@ public partial class NrwPropertyImporter(
     [LoggerMessage(Level = LogLevel.Information, Message = "Processing {Entry}...")]
     private static partial void LogProcessingEntry(ILogger logger, string entry);
 }
+
+/// <summary>NRW's probe result: carries the ZIP's file name to <see cref="NrwPropertyImporter.FetchAsync"/>.</summary>
+public sealed record NrwProbe(string FileName, string Fingerprint) : SourceProbe(Fingerprint, FingerprintKind.Exact);

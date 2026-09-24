@@ -24,14 +24,14 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 /// </summary>
 public sealed class InspirePropertyImporterTests
 {
-    private static readonly ImportCandidate Candidate = new("test-alkis", "statewide", "v");
+    /// <summary>The importer re-reads the counts itself, so any probe of its kind will do.</summary>
+    private static readonly SourceProbe Probe = new("4:4", FingerprintKind.Approximate);
 
     private static InspireSourceOptions Options(Action<InspireSourceOptions>? tweak = null)
     {
         var options = new InspireSourceOptions
         {
             Source = "test",
-            DatasetName = "test-alkis",
             ParcelWfsUrl = FakeWfsServer.ParcelUrl,
             AddressWfsUrl = FakeWfsServer.AddressUrl,
             Crs = "urn:ogc:def:crs:EPSG::25832",
@@ -93,10 +93,10 @@ public sealed class InspirePropertyImporterTests
         return provider;
     }
 
-    private static async Task<List<Property>> FetchAllAsync(InspirePropertyImporter importer)
+    private static async Task<List<Property>> FetchAllAsync(InspirePropertyImporter importer, ImportRunContext? run = null)
     {
         var rows = new List<Property>();
-        await foreach (var row in importer.FetchAsync(Candidate, TestContext.Current.CancellationToken))
+        await foreach (var row in importer.FetchAsync(Probe, run ?? new ImportRunContext(1, "test"), TestContext.Current.CancellationToken))
             rows.Add(row);
         return rows;
     }
@@ -259,27 +259,28 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
-    public async Task FetchAsync_TileSkipped_ReportsTheCountForTheImportLog()
+    public async Task FetchAsync_TileSkipped_ReportsItToTheRun()
     {
         var server = GridServer(10);
         server.Interceptor = (uri, _) => IsTileOf(uri, FakeWfsServer.AddressUrl, 50, 50)
             ? new HttpResponseMessage(HttpStatusCode.BadGateway)
             : null;
         var importer = Importer(server, Options(o => o.TileSizeMeters = 10));
+        var run = new ImportRunContext(1, "test");
 
-        await FetchAllAsync(importer);
+        await FetchAllAsync(importer, run);
 
-        importer.SkippedTiles.Should().Be(1, "the orchestrator records this on the ImportLog");
+        run.SkippedParts.Should().Be(1, "the writer records this on the ImportRun");
     }
 
     [Fact]
     public async Task FetchAsync_NothingSkipped_ReportsZero()
     {
-        var importer = Importer(GridServer(2), Options());
+        var run = new ImportRunContext(1, "test");
 
-        await FetchAllAsync(importer);
+        await FetchAllAsync(Importer(GridServer(2), Options()), run);
 
-        importer.SkippedTiles.Should().Be(0);
+        run.SkippedParts.Should().Be(0);
     }
 
     [Fact]
@@ -561,25 +562,25 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_VersionCombinesCountsAndMonth()
+    public async Task ProbeAsync_FingerprintIsParcelAndAddressCountsAndApproximate()
     {
-        var server = GridServer(2);
-        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        // Counts drift daily in active states; no time component — how often to re-import is
+        // the planner's decision.
+        var probe = await Importer(GridServer(2), Options()).ProbeAsync(TestContext.Current.CancellationToken);
 
-        var candidates = await Importer(server, Options(), time).DiscoverAsync(TestContext.Current.CancellationToken);
-
-        candidates.Should().ContainSingle().Which.VersionTimestamp.Should().Be("4:4:2026-09");
+        probe.Should().Be(new SourceProbe("4:4", FingerprintKind.Approximate));
     }
 
     [Fact]
-    public async Task DiscoverAsync_UnknownFeatureCount_ReturnsNoCandidate()
+    public async Task ProbeAsync_UnknownFeatureCount_Fails()
     {
         var server = GridServer(2);
         server.AddressHitsOverride = "unknown";
 
-        var candidates = await Importer(server, Options()).DiscoverAsync(TestContext.Current.CancellationToken);
+        var act = () => Importer(server, Options()).ProbeAsync(TestContext.Current.CancellationToken);
 
-        candidates.Should().BeEmpty("without a total, the import's completeness can't be checked");
+        await act.Should().ThrowAsync<InspireImportException>("without a total, the import's completeness can't be checked")
+            .WithMessage("*feature counts*");
     }
 
     [Fact]
@@ -848,14 +849,14 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_OgcApiAddressesConfigured_ReadsHitsFromTheOgcApiEndpoint()
+    public async Task ProbeAsync_OgcApiAddressesConfigured_ReadsHitsFromTheOgcApiEndpoint()
     {
         var server = GridServer(2); // 4 parcels, 4 addresses
 
-        var candidates = await Importer(server, Options(o => o.UseOgcApiAddresses = true))
-            .DiscoverAsync(TestContext.Current.CancellationToken);
+        var probe = await Importer(server, Options(o => o.UseOgcApiAddresses = true))
+            .ProbeAsync(TestContext.Current.CancellationToken);
 
-        candidates.Should().ContainSingle().Which.VersionTimestamp.Should().StartWith("4:4:");
+        probe.Fingerprint.Should().Be("4:4");
         server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
     }
 }

@@ -8,6 +8,7 @@ using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Services.Importers.Nrw;
 using Grundstuecksfinder.Services.Importers.Postcodes;
+using Grundstuecksfinder.Services.Importers.Scheduling;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Npgsql;
@@ -36,22 +37,31 @@ var dataSource = NpgsqlDataSource.Create(connectionString);
 builder.Services.AddSingleton(dataSource);
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(dataSource));
 
-// ── Property importers ────────────────────────────────────────────────────────
-// Add a new Bundesland/country by implementing IPropertyImporter and registering it here.
+// ── Property sources ──────────────────────────────────────────────────────────
+// Add a new Bundesland/country by implementing IPropertySource and registering it here.
 // Every source can be switched off with "Enabled": false, which stops its imports and hides
 // its rows (see DisabledSources) without deleting them.
+builder.Services.AddSingleton(TimeProvider.System);
+
 var nrwEnabled = builder.Configuration.GetSection("Import:Nrw").Get<NrwImporterOptions>()?.Enabled ?? true;
 builder.Services.Configure<NrwImporterOptions>(builder.Configuration.GetSection("Import:Nrw"));
 if (nrwEnabled)
-    builder.Services.AddScoped<IPropertyImporter, NrwPropertyImporter>();
+    builder.Services.AddScoped<IPropertySource, NrwPropertyImporter>();
 
-// One IPropertyImporter per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
+// One IPropertySource per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –
 // adding a state is adding an "Import:Inspire:Sources" entry, no new code. A broken entry
 // fails startup (and so the deploy) instead of the nightly import.
 var inspireSources = builder.Configuration.GetSection("Import:Inspire:Sources").Get<List<InspireSourceOptions>>() ?? [];
 var inspireConfigErrors = InspireSourceOptions.Validate(inspireSources, [NrwPropertyImporter.SourceId]);
 if (inspireConfigErrors.Count > 0)
     throw new InvalidOperationException("Invalid Import:Inspire:Sources config:\n" + string.Join("\n", inspireConfigErrors));
+
+// When sources are re-imported (see RefreshPlanner); checked at startup like the sources.
+var refreshOptions = builder.Configuration.GetSection(RefreshOptions.SectionName).Get<RefreshOptions>() ?? new RefreshOptions();
+var refreshConfigErrors = refreshOptions.Validate(inspireSources.ToDictionary(s => s.Source, s => s.Refresh));
+if (refreshConfigErrors.Count > 0)
+    throw new InvalidOperationException("Invalid import refresh config:\n" + string.Join("\n", refreshConfigErrors));
+builder.Services.AddSingleton(refreshOptions);
 
 builder.Services.AddSingleton(new DisabledSources(
     inspireSources.Where(s => !s.Enabled).Select(s => s.Source)
@@ -73,19 +83,22 @@ builder.Services.AddSingleton<IPostcodeAreaProvider, PostcodeAreaProvider>();
 builder.Services.AddSingleton<NameCatalogLoader>();
 foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
-    builder.Services.AddScoped<IPropertyImporter>(sp => new InspirePropertyImporter(
+    builder.Services.AddScoped<IPropertySource>(sp => new InspirePropertyImporter(
         sp.GetRequiredService<ILogger<InspirePropertyImporter>>(),
         sp.GetRequiredService<IHttpClientFactory>(),
         inspireSource,
         postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>(),
         nameCatalogLoader: sp.GetRequiredService<NameCatalogLoader>(),
-        loggerFactory: sp.GetRequiredService<ILoggerFactory>()));
+        loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
+        refreshPolicy: refreshOptions.PolicyFor(inspireSource.Refresh)));
 }
 
 var minRetainedRatio = builder.Configuration.GetValue("Import:MinRetainedRatio", PropertyBulkWriter.DefaultMinRetainedRatio);
 builder.Services.AddScoped(sp => new PropertyBulkWriter(
-    sp.GetRequiredService<NpgsqlDataSource>(), sp.GetRequiredService<ILogger<PropertyBulkWriter>>(), minRetainedRatio));
-builder.Services.AddScoped<ImportOrchestrator>();
+    sp.GetRequiredService<NpgsqlDataSource>(), sp.GetRequiredService<ILogger<PropertyBulkWriter>>(), minRetainedRatio,
+    timeProvider: sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<ImportStateStore>();
+builder.Services.AddScoped<ImportRunner>();
 builder.Services.AddHostedService<ImportWorker>();
 
 // ── Telemetrie (OpenTelemetry-kompatibel via System.Diagnostics.Metrics) ──────
