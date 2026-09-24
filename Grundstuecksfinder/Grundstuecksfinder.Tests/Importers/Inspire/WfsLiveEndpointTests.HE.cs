@@ -10,6 +10,9 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 public partial class WfsLiveEndpointTests
 {
     // ── Hessen ───────────────────────────────────────────────────────────────
+    // Parcels from the INSPIRE WFS; addresses from the Hauskoordinaten file in HVBG's download
+    // center (see AddressSourceType.HkFile). The INSPIRE address WFS replaced every umlaut with
+    // U+FFFD; the file's names are intact.
 
     [Fact]
     public async Task HE_Parcels_ParseSuccessfully()
@@ -25,23 +28,6 @@ public partial class WfsLiveEndpointTests
         parcels.Should().OnlyContain(p => p.AreaM2 > 0);
         parcels.Should().OnlyContain(p => p.Geometry.IsValid);
     }
-
-    [Fact]
-    public async Task HE_Addresses_ParseSuccessfully()
-    {
-        using var stream = await FetchGetFeature(
-            "https://inspire-hessen.de/ows/services/org.2.19698713-4b13-4938-a9db-96bfdc996451_wfs",
-            "ad:Address",
-            "480000,5550000,481000,5551000",
-            "urn:ogc:def:crs:EPSG::25832",
-            resolve: true);
-
-        var addresses = WfsGmlParser.ParseAddresses(stream).Features.ToList();
-        addresses.Should().NotBeEmpty("HE should have addresses in this tile near Frankfurt");
-        addresses.Should().OnlyContain(a => a.Location != null);
-    }
-
-    // ── Hessen's Hauskoordinaten file, via the download center ───────────────
 
     private const string HessenHauskoordinatenListing =
         "https://gds.hessen.de/INTERSHOP/rest/WFS/HLBG-Geodaten-Site/-/downloadcenter?path=Liegenschaftskataster/Hauskoordinaten%20ohne%20Postalische%20Angaben%20(txt)&navigation=all";

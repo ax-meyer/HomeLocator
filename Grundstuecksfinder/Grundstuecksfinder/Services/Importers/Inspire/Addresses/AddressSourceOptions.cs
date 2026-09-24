@@ -12,7 +12,7 @@ public enum AddressSourceType
     /// <summary>An OGC API Features "items" endpoint with the ALKIS Hauskoordinaten schema (Saarland).</summary>
     OgcApiFeatures,
 
-    /// <summary>A statewide Hauskoordinaten text file in a ZIP (Baden-Württemberg).</summary>
+    /// <summary>A statewide Hauskoordinaten text file in a ZIP (Baden-Württemberg, Hessen).</summary>
     HkFile,
 }
 
