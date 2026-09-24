@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Level-hierarchy address data without AGS codes, modeled on real BW and HE WFS responses (2026-09-21). BW misspells its own Land; HE has no PostalDescriptor and its server replaces every non-ASCII character with U+FFFD. -->
+<!-- Level-hierarchy address data without AGS codes, modeled on real BW and HE WFS responses (2026-09-21). BW misspells its own Land; HE has no PostalDescriptor. -->
 <wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0"
                        xmlns:gml="http://www.opengis.net/gml/3.2"
                        xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -52,7 +52,7 @@
       <wfs:member><AdminUnitName gml:id="AdminUnitName_he_kreis"><name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>Kreisfreie Stadt Frankfurt am Main</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name><level xlink:href="http://inspire.ec.europa.eu/codelist/AdministrativeHierarchyLevel/4thOrder"/></AdminUnitName></wfs:member>
       <wfs:member><AdminUnitName gml:id="AdminUnitName_he_land"><name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>Hessen</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name><level xlink:href="http://inspire.ec.europa.eu/codelist/AdministrativeHierarchyLevel/2ndOrder"/></AdminUnitName></wfs:member>
       <wfs:member><AdminUnitName gml:id="AdminUnitName_he_gem"><name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>Frankfurt am Main</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name><level xlink:href="http://inspire.ec.europa.eu/codelist/AdministrativeHierarchyLevel/6thOrder"/></AdminUnitName></wfs:member>
-      <wfs:member><ThoroughfareName gml:id="ThoroughfareName_HE_1"><name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>Adam-Riese-Stra�e</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name></ThoroughfareName></wfs:member>
+      <wfs:member><ThoroughfareName gml:id="ThoroughfareName_HE_1"><name><gn:GeographicalName><gn:spelling><gn:SpellingOfName><gn:text>Adam-Riese-Straße</gn:text></gn:SpellingOfName></gn:spelling></gn:GeographicalName></name></ThoroughfareName></wfs:member>
     </wfs:SimpleFeatureCollection>
   </wfs:additionalObjects>
 </wfs:FeatureCollection>

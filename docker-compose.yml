@@ -9,7 +9,6 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__DefaultConnection: "Host=db;Database=homelocator;Username=homelocator;Password=${DB_PASSWORD}"
       Geocoding__NominatimBaseUrl: "http://nominatim:8080/"
-      Geocoding__RepairCorruptedStreets: "true"
       # German number formatting ("4.931.442") and local times on the page. The image has ICU
       # and tzdata; the nightly import stays scheduled at 03:00 UTC regardless.
       LANG: de_DE.UTF-8

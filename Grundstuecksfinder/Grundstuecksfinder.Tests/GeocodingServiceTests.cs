@@ -7,7 +7,6 @@ using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Options;
 
 namespace Grundstuecksfinder.Tests;
 
@@ -15,7 +14,6 @@ public sealed class GeocodingServiceTests : IDisposable
 {
     private readonly FakeHttpMessageHandler _handler = new();
     private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly GeocodingOptions _options = new();
     private readonly GeocodingService _service;
 
     public GeocodingServiceTests()
@@ -23,7 +21,7 @@ public sealed class GeocodingServiceTests : IDisposable
         var http = new HttpClient(_handler) { BaseAddress = new Uri("https://nominatim.openstreetmap.org/") };
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient("Nominatim")).Returns(http);
-        _service = new GeocodingService(factory, _cache, Options.Create(_options));
+        _service = new GeocodingService(factory, _cache);
     }
 
     public void Dispose() => _cache.Dispose();
@@ -122,20 +120,6 @@ public sealed class GeocodingServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GeocodeAsync_HessenCorruptedStrasse_QueriesNominatimWithRepairedStreet()
-    {
-        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("[]", Encoding.UTF8, "application/json")
-        });
-
-        await _service.GeocodeAsync(SampleProperty(str: "Adam-Riese-Stra\uFFFDe", ort: "Frankfurt am Main"));
-
-        Uri.UnescapeDataString(_handler.RequestedUris[0].Query)
-            .Should().Contain("street=1 Adam-Riese-Straße&");
-    }
-
-    [Fact]
     public async Task GeocodeAsync_NoHitWithCity_RetriesWithStreetAndPostcodeOnly()
     {
         _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
@@ -172,58 +156,5 @@ public sealed class GeocodingServiceTests : IDisposable
 
         result.Should().BeNull();
         _handler.RequestedUris.Should().ContainSingle("street alone would match the same street anywhere in Germany");
-    }
-
-    private static HttpResponseMessage NominatimHit(string road) => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent(
-            $$$"""[{"lat":"50.1","lon":"8.6","address":{"house_number":"1","road":"{{{road}}}","city":"Frankfurt am Main"}}]""",
-            Encoding.UTF8, "application/json")
-    };
-
-    private static HttpResponseMessage NominatimMiss() => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent("[]", Encoding.UTF8, "application/json")
-    };
-
-    [Fact]
-    public async Task GeocodeAsync_RepairEnabled_TriesSpellingsUntilNominatimConfirmsOne()
-    {
-        _options.RepairCorruptedStreets = true;
-        _handler.SetDefault(() =>
-        {
-            var query = Uri.UnescapeDataString(_handler.RequestedUris[^1].Query);
-            return query.Contains("Am Mühlgraben") ? NominatimHit("Am Mühlgraben") : NominatimMiss();
-        });
-
-        var result = await _service.GeocodeAsync(SampleProperty(str: "Am M\uFFFDhlgraben", ort: "Frankfurt am Main"));
-
-        result.Should().NotBeNull();
-        _handler.RequestedUris.Should().HaveCount(1, "ü is the most likely letter after a consonant");
-    }
-
-    [Fact]
-    public async Task GeocodeAsync_RepairEnabled_RejectsHitWhoseStreetDiffersFromCandidate()
-    {
-        _options.RepairCorruptedStreets = true;
-        // Nominatim matching loosely and returning some other street must not count as confirmation.
-        _handler.SetDefault(() => NominatimHit("Hauptstraße"));
-
-        var result = await _service.GeocodeAsync(SampleProperty(str: "Am M\uFFFDhlgraben", ort: "Frankfurt am Main"));
-
-        result.Should().BeNull();
-        _handler.RequestedUris.Should().HaveCount(10,
-            "every single-letter candidate is tried, then all of them again without the city");
-    }
-
-    [Fact]
-    public async Task GeocodeAsync_RepairDisabled_SendsOneRequestOnly()
-    {
-        _handler.SetDefault(NominatimMiss);
-
-        await _service.GeocodeAsync(SampleProperty(str: "Am M\uFFFDhlgraben", ort: "Frankfurt am Main"));
-
-        _handler.RequestedUris.Should().HaveCount(2,
-            "the public Nominatim must not get a burst of guesses — only the plain city-less retry");
     }
 }

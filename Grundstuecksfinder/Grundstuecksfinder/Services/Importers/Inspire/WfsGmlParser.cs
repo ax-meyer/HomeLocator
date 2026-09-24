@@ -169,7 +169,7 @@ public static class WfsGmlParser
                   ?? PlaceNameNormalizer.NormalizePlace(postName)
                   ?? gemeinde;
 
-        return (PlaceNameNormalizer.RepairStreet(str), plz, ort, gemeinde);
+        return (PlaceNameNormalizer.NormalizeStreet(str), plz, ort, gemeinde);
     }
 
     private static (string? Hnr, string? HnrZus) ParseDesignators(XElement address)

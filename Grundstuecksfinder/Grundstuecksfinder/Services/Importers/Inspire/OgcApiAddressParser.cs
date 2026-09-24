@@ -37,7 +37,7 @@ public static class OgcApiAddressParser
             var point = ParsePoint(props);
             if (point is null) continue; // nothing to join without a location
 
-            var str = PlaceNameNormalizer.RepairStreet(GetString(props, "STN"));
+            var str = PlaceNameNormalizer.NormalizeStreet(GetString(props, "STN"));
             var hnr = GetString(props, "HNR");
             var hnrZus = GetString(props, "ADZ");
             var plz = PostalCode.Normalize(GetString(props, "PLZ"));
