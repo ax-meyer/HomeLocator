@@ -1,4 +1,5 @@
 using Grundstuecksfinder.Models;
+using Npgsql;
 
 namespace Grundstuecksfinder.Services.Importers.Scheduling;
 
@@ -10,19 +11,43 @@ namespace Grundstuecksfinder.Services.Importers.Scheduling;
 /// the run moves on to the next; only cancellation of the whole run propagates.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Sources are imported sequentially on purpose: the large ones run for hours against public
 /// services that are asked to be used gently, and the database takes one swap at a time anyway.
+/// </para>
+/// <para>
+/// A whole run holds a database-wide lock, so two instances (a deploy overlap, a dev machine
+/// pointed at prod) never plan and record at the same time; the one that finds it taken skips
+/// its run without recording anything. Holding it also means no other run can be in progress,
+/// so a run found unfinished was cut short by a crash or a shutdown and is recorded as failed.
+/// </para>
 /// </remarks>
 public sealed partial class ImportRunner(
     IEnumerable<IPropertySource> sources,
     ImportStateStore store,
     PropertyBulkWriter writer,
+    NpgsqlDataSource dataSource,
     RefreshOptions options,
     TimeProvider time,
     ILogger<ImportRunner> logger)
 {
+    /// <summary>The advisory lock scope and key a whole run holds.</summary>
+    public const string RunLockScope = "property-import-run";
+    public const string RunLockKey = "all-sources";
+
     public async Task RunAsync(CancellationToken ct)
     {
+        await using var runLock = await AdvisoryLock.TryAcquireAsync(dataSource, RunLockScope, RunLockKey, logger, ct);
+        if (runLock is null)
+        {
+            LogAnotherInstanceRunning(logger);
+            return;
+        }
+
+        var interrupted = await store.FailInterruptedRunsAsync(time.GetUtcNow(), ct);
+        if (interrupted > 0)
+            LogInterruptedRuns(logger, interrupted);
+
         var registered = sources.ToList();
         var history = await store.LoadAsync(ct);
 
@@ -81,8 +106,14 @@ public sealed partial class ImportRunner(
             var count = await writer.WriteAsync(run, source.FetchAsync(planned.Probe, run, ct), ct);
             LogImportComplete(logger, source.Id, count, run.SkippedParts);
         }
-        // A cancelled run stays unfinished, like one cut short by a crash: it didn't fail, and
-        // the source is simply planned again on the next start.
+        // Someone else is importing this source right now; nothing was attempted here.
+        catch (ImportAlreadyRunningException ex)
+        {
+            LogSourceLocked(logger, ex, source.Id);
+            await store.DiscardRunAsync(runId, ct);
+        }
+        // A cancelled run is left unfinished here, like one cut short by a crash: the next run
+        // records it as interrupted and plans the source again.
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             LogImportFailed(logger, ex, source.Id);
@@ -90,6 +121,15 @@ public sealed partial class ImportRunner(
             await store.FailRunAsync(runId, time.GetUtcNow(), ex.Message, ct);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Another instance is running an import; skipping this run")]
+    private static partial void LogAnotherInstanceRunning(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Recorded {Count} unfinished import runs as failed: the process stopped during them")]
+    private static partial void LogInterruptedRuns(ILogger logger, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: another process is importing this source; skipping it this run")]
+    private static partial void LogSourceLocked(ILogger logger, Exception exception, string source);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: probed, fingerprint {Fingerprint} ({Kind})")]
     private static partial void LogProbed(ILogger logger, string source, string fingerprint, FingerprintKind kind);

@@ -3,8 +3,9 @@ namespace Grundstuecksfinder.Models;
 /// <summary>
 /// One attempt at importing a source. Append-only: a retry is a new run, so the history shows
 /// every attempt and why it was made. A run is still going while neither
-/// <see cref="CompletedAt"/> nor <see cref="FailedAt"/> is set — or was cut short by a crash,
-/// which leaves it that way for good; nothing depends on it finishing.
+/// <see cref="CompletedAt"/> nor <see cref="FailedAt"/> is set. One cut short by a crash or a
+/// shutdown is recorded as failed ("interrupted") by the next run, see
+/// <see cref="Services.Importers.Scheduling.ImportStateStore.FailInterruptedRunsAsync"/>.
 /// </summary>
 public class ImportRun
 {

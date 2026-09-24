@@ -20,6 +20,7 @@ public static class ImportRunnerExtensions
             sources,
             new ImportStateStore(context),
             new PropertyBulkWriter(fixture.DataSource, batchSize: writerBatchSize, timeProvider: time),
+            fixture.DataSource,
             options ?? new RefreshOptions(),
             time,
             NullLogger<ImportRunner>.Instance);

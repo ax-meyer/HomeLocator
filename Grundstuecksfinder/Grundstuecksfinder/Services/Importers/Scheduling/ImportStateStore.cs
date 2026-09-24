@@ -18,6 +18,9 @@ public sealed class ImportStateStore(AppDbContext db)
     /// <summary>Longer messages (a whole response body) are cut; /health shows this.</summary>
     public const int MaxErrorLength = 2000;
 
+    /// <summary>The error recorded on a run found unfinished; see <see cref="FailInterruptedRunsAsync"/>.</summary>
+    public const string InterruptedError = "interrupted: the process stopped during the import";
+
     /// <summary>Every source with a history; a source missing here has never been imported.</summary>
     public async Task<IReadOnlyDictionary<string, SourceHistory>> LoadAsync(CancellationToken ct)
     {
@@ -84,6 +87,20 @@ public sealed class ImportStateStore(AppDbContext db)
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.FailedAt, at).SetProperty(r => r.Error, truncated), ct);
     }
+
+    /// <summary>Removes a run that never got to import anything, so it isn't taken for an attempt.</summary>
+    public async Task DiscardRunAsync(int runId, CancellationToken ct) =>
+        await db.ImportRuns.Where(r => r.Id == runId).ExecuteDeleteAsync(ct);
+
+    /// <summary>
+    /// Records every unfinished run as failed. Only valid while holding the whole-run lock: then
+    /// no run can be in progress, so an unfinished one was cut short by a crash or a shutdown.
+    /// Failed, it shows on /health and counts as its source's last attempt. Returns how many.
+    /// </summary>
+    public async Task<int> FailInterruptedRunsAsync(DateTimeOffset at, CancellationToken ct) =>
+        await db.ImportRuns
+            .Where(r => r.CompletedAt == null && r.FailedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.FailedAt, at).SetProperty(r => r.Error, InterruptedError), ct);
 
     private static string? Truncate(string? error) =>
         error is { Length: > MaxErrorLength } ? error[..MaxErrorLength] : error;

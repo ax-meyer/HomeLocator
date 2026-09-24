@@ -11,13 +11,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<DailyTelemetry> DailyTelemetry => Set<DailyTelemetry>();
 
     /// <summary>
-    /// Each source's latest finished run, where that one failed. A run still going (or cut short
-    /// by a crash or shutdown) has no say yet; the finished one before it does.
+    /// Each source's latest finished run, where that one failed. "Latest" by when it finished,
+    /// not by ID: of two overlapping runs, the one that started first can finish last. A run
+    /// still going has no say yet; the finished one before it does.
     /// </summary>
     public IQueryable<ImportRun> LatestRunsIfFailed => ImportRuns.Where(r =>
         r.FailedAt != null
-        && !ImportRuns.Any(newer => newer.Source == r.Source && newer.Id > r.Id
-                                    && (newer.CompletedAt != null || newer.FailedAt != null)));
+        && !ImportRuns.Any(later => later.Source == r.Source && later.Id != r.Id
+                                    && ((later.CompletedAt ?? later.FailedAt) > r.FailedAt
+                                        || ((later.CompletedAt ?? later.FailedAt) == r.FailedAt && later.Id > r.Id))));
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

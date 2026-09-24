@@ -29,6 +29,9 @@ public partial class PropertyBulkWriter(
     /// </summary>
     public const double DefaultMinRetainedRatio = 0.98;
 
+    /// <summary>The advisory lock scope of a source's import; its key is the source's ID.</summary>
+    public const string SourceLockScope = "property-import";
+
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(5);
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
@@ -41,30 +44,21 @@ public partial class PropertyBulkWriter(
     {
         var source = run.Source;
         // Two processes importing the same source (a deploy overlap, a dev machine pointed at
-        // prod) would clear and fill the same staging rows. The session-level lock lives as
-        // long as this connection.
-        await using var lockConnection = await dataSource.OpenConnectionAsync(ct);
-        if (!await TryLockSourceAsync(lockConnection, source, ct))
-            throw new InvalidOperationException($"Another import of {source} is already running.");
+        // prod) would clear and fill the same staging rows.
+        await using var sourceLock = await AdvisoryLock.TryAcquireAsync(dataSource, SourceLockScope, source, logger, ct)
+            ?? throw new ImportAlreadyRunningException($"Another import of {source} is already running.");
 
+        // Leftovers of a crashed earlier run must not end up in this one.
+        await ClearStagingAsync(source, ct);
         try
         {
-            // Leftovers of a crashed earlier run must not end up in this one.
-            await ClearStagingAsync(source, ct);
-            try
-            {
-                var count = await StageAsync(source, properties, ct);
-                await SwapAsync(run, count, ct);
-                return count;
-            }
-            finally
-            {
-                await TryClearStagingAsync(source);
-            }
+            var count = await StageAsync(source, properties, ct);
+            await SwapAsync(run, count, ct);
+            return count;
         }
         finally
         {
-            await UnlockSourceAsync(lockConnection, source);
+            await TryClearStagingAsync(source);
         }
     }
 
@@ -213,32 +207,6 @@ public partial class PropertyBulkWriter(
         }
     }
 
-    private static async Task<bool> TryLockSourceAsync(NpgsqlConnection conn, string source, CancellationToken ct)
-    {
-        await using var command = new NpgsqlCommand(
-            "SELECT pg_try_advisory_lock(hashtext('property-import'), hashtext($1))", conn);
-        command.Parameters.AddWithValue(source);
-        return (bool)(await command.ExecuteScalarAsync(ct))!;
-    }
-
-    private async Task UnlockSourceAsync(NpgsqlConnection conn, string source)
-    {
-        try
-        {
-            await using var command = new NpgsqlCommand(
-                "SELECT pg_advisory_unlock(hashtext('property-import'), hashtext($1))", conn);
-            command.Parameters.AddWithValue(source);
-            await command.ExecuteScalarAsync(CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // A pooled connection keeps session-level advisory locks when it goes back to the
-            // pool; make sure this one is closed instead of reused, which releases the lock.
-            NpgsqlConnection.ClearPool(conn);
-            if (logger is not null) LogUnlockFailed(logger, ex, source);
-        }
-    }
-
     private static async Task WriteNullableTextAsync(NpgsqlBinaryImporter writer, string? value, CancellationToken ct)
     {
         if (value != null)
@@ -249,9 +217,6 @@ public partial class PropertyBulkWriter(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't clear staged rows; the next import of this source clears them")]
     private static partial void LogStagingCleanupFailed(ILogger logger, Exception exception, string source);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't release the import lock explicitly; closing its connection instead")]
-    private static partial void LogUnlockFailed(ILogger logger, Exception exception, string source);
 }
 
 /// <summary>An import would shrink its source by more than the allowed ratio; not swapped in.</summary>

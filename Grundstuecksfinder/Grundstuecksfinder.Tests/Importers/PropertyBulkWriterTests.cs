@@ -133,7 +133,7 @@ public sealed class PropertyBulkWriterTests(PostgresFixture fixture) : IAsyncLif
             var act = async () => await new PropertyBulkWriter(fixture.DataSource)
                 .WriteAsync(await NewRunAsync("v1"), Rows(1), TestContext.Current.CancellationToken);
 
-            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*already running*");
+            await act.Should().ThrowAsync<ImportAlreadyRunningException>().WithMessage("*already running*");
         }
         finally
         {

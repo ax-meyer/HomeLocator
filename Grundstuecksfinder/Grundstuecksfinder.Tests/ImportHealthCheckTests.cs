@@ -67,6 +67,28 @@ public sealed class ImportHealthCheckTests(PostgresFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task LatestAttempt_IsTheLastToFinish_NotTheLastToStart()
+    {
+        // Two overlapping runs: the one started first (lower ID) completed after the other failed.
+        var completedLater = Completed("he", Day(3));
+        completedLater.StartedAt = Day(1);
+        await SeedAsync([completedLater, Failed("he", Day(2), "boom")], Serving(completedLater));
+
+        (await CheckAsync()).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    [Fact]
+    public async Task FailureFinishingAfterAnOverlappingSuccess_IsReported()
+    {
+        var he = Completed("he", Day(2));
+        var failedLater = Failed("he", Day(3), "boom");
+        failedLater.StartedAt = Day(1);
+        await SeedAsync([failedLater, he], Serving(he));
+
+        (await CheckAsync()).Description.Should().Contain("he: boom");
+    }
+
+    [Fact]
     public async Task FailureFollowedByAnUnfinishedRun_IsStillReported()
     {
         // A retry that is still going (or was cut short by a crash) hasn't shown anything yet.

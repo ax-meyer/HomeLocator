@@ -221,6 +221,57 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnotherInstanceRunning_SkipsTheRunWithoutRecordingAnything()
+    {
+        var source = new StubSource("a", "v1");
+        await using var otherInstance = await AdvisoryLock.TryAcquireAsync(
+            fixture.DataSource, ImportRunner.RunLockScope, ImportRunner.RunLockKey, logger: null, Ct);
+
+        await RunAsync(source);
+
+        source.Probes.Should().Be(0);
+        await using var context = fixture.CreateContext();
+        (await context.ImportRuns.AnyAsync(Ct)).Should().BeFalse();
+        (await context.SourceStates.AnyAsync(Ct)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SourceLockedByAnotherImport_IsNotRecordedAsAFailedRun()
+    {
+        var locked = new StubSource("a", "v1");
+        var other = new StubSource("b", "v1");
+        await using (await AdvisoryLock.TryAcquireAsync(fixture.DataSource, PropertyBulkWriter.SourceLockScope, "a", logger: null, Ct))
+            await RunAsync(locked, other);
+
+        (await RunsAsync("a")).Should().BeEmpty("nothing was attempted, so nothing failed");
+        (await StreetsAsync("b")).Should().ContainSingle();
+
+        AdvanceDays(1);
+        await RunAsync(locked, other);
+
+        (await RunsAsync("a")).Should().ContainSingle().Which.Reason.Should().Be(ImportReason.Initial);
+    }
+
+    [Fact]
+    public async Task RunCutShortByACrash_IsRecordedAsFailedAndRetriedAfterTheOthers()
+    {
+        await using (var context = fixture.CreateContext())
+        {
+            context.ImportRuns.Add(ImportSeed.Unfinished("bw", T0.AddDays(-1)));
+            await context.SaveChangesAsync(Ct);
+        }
+        var order = new List<string>();
+        StubSource Recording(string id) => new(id, "1", FingerprintKind.Approximate) { DuringFetch = () => order.Add(id) };
+
+        await RunAsync(Recording("bw"), Recording("sh"), Recording("sn"));
+
+        order.Should().Equal(["sh", "sn", "bw"], "a source that may have taken the process down goes last");
+        var interrupted = (await RunsAsync("bw")).First();
+        interrupted.FailedAt.Should().Be(T0);
+        interrupted.Error.Should().Be(ImportStateStore.InterruptedError);
+    }
+
+    [Fact]
     public async Task RunCancelled_Propagates()
     {
         using var cts = new CancellationTokenSource();
@@ -293,12 +344,17 @@ public sealed class ImportRunnerTests(PostgresFixture fixture) : IAsyncLifetime
         public int SkippedParts { get; init; }
         public Exception? ProbeFailure { get; set; }
         public Action? DuringFetch { get; set; }
+        public int Probes { get; private set; }
         public int Fetches { get; private set; }
         public List<SourceProbe> FetchedProbes { get; } = [];
 
-        public Task<SourceProbe> ProbeAsync(CancellationToken ct) => ProbeFailure is { } failure
-            ? Task.FromException<SourceProbe>(failure)
-            : Task.FromResult(new SourceProbe(Fingerprint, kind));
+        public Task<SourceProbe> ProbeAsync(CancellationToken ct)
+        {
+            Probes++;
+            return ProbeFailure is { } failure
+                ? Task.FromException<SourceProbe>(failure)
+                : Task.FromResult(new SourceProbe(Fingerprint, kind));
+        }
 
         public async IAsyncEnumerable<Property> FetchAsync(SourceProbe probe, ImportRunContext run, [EnumeratorCancellation] CancellationToken ct)
         {
