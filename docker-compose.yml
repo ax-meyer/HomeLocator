@@ -14,7 +14,9 @@ services:
       LANG: de_DE.UTF-8
       TZ: Europe/Berlin
     volumes:
-      - dataprotection_keys:/root/.aspnet/DataProtection-Keys
+      # A volume of its own for the non-root user: the old "dataprotection_keys" one belongs to
+      # root. Starting over only drops the keys of forms open during the switch.
+      - dataprotection_keys_app:/home/app/.aspnet/DataProtection-Keys
     depends_on:
       db:
         condition: service_healthy
@@ -112,5 +114,5 @@ networks:
 
 volumes:
   postgres_data:
-  dataprotection_keys:
+  dataprotection_keys_app:
   nominatim_data:

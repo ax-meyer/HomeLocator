@@ -105,6 +105,16 @@ docker compose up -d app
 The first start then imports all sources back to back, which takes about 16 hours; the site
 shows no data until the first source completes.
 
+### Upgrading to the non-root container
+
+The app now runs as the image's unprivileged `app` user instead of root, and its DataProtection
+keys moved to a new volume, `dataprotection_keys_app` (the old one belongs to root). Nothing needs
+doing on deploy; afterwards the old volume can be removed:
+
+```bash
+docker volume rm <project>_dataprotection_keys
+```
+
 ### Local development
 
 `docker-compose.dev.yml` only starts a local Postgres instance (hardcoded dev password, no

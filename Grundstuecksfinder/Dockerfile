@@ -21,6 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 WORKDIR /app
 COPY --from=build /app/publish .
 
+# Run as the image's unprivileged "app" user (APP_UID). The app only writes its log files
+# (logs/ here), the DataProtection keys (under $HOME, a volume in docker-compose.yml) and
+# downloads in /tmp. The keys directory is created here so that a new volume mounted on it
+# takes over its owner.
+RUN mkdir -p /app/logs /home/app/.aspnet/DataProtection-Keys \
+    && chown -R "$APP_UID" /app/logs /home/app/.aspnet
+USER $APP_UID
+
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
