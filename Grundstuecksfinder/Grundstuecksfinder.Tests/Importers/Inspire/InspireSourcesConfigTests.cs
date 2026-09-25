@@ -32,6 +32,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("he", AddressSourceType.HkFile)]
     [InlineData("sl", AddressSourceType.OgcApiFeatures)]
     [InlineData("rp", AddressSourceType.ParcelLagebezeichnung)]
+    [InlineData("th", AddressSourceType.ParcelLagebezeichnung)]
     public void ShippedSources_UseTheirAddressSource(string source, AddressSourceType type) =>
         ShippedSources().Single(s => s.Source == source).AddressSource.Type.Should().Be(type);
 
@@ -76,5 +77,18 @@ public sealed class InspireSourcesConfigTests
         rp.ParcelFeatureType.GemeindeField.Should().Be("gemeinde");
         rp.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
         rp.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
+    }
+
+    [Fact]
+    public void ShippedSources_ThueringenBindsTheAvePrefixAndKeepsPagesSmall()
+    {
+        var th = ShippedSources().Single(s => s.Source == "th");
+
+        th.ParcelFeatureType.TypeName.Should().Be("ave:Flurstueck");
+        th.ParcelFeatureType.Namespace.Should().Be(
+            "http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/1.0", "the server doesn't know the prefix without it");
+        th.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
+        th.PageSize.Should().Be(1000, "5,000 parcels take the server 43 s, 1,000 only 2 s");
+        th.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
     }
 }

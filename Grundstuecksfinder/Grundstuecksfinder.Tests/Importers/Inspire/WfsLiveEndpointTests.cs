@@ -36,16 +36,20 @@ public partial class WfsLiveEndpointTests
     }
 
     private static async Task<Stream> FetchGetFeature(string baseUrl, string typeName, string bbox, string crs,
-        int count = 5, bool resolve = false)
+        int count = 5, bool resolve = false, string? typeNamespace = null)
     {
         var resolveSuffix = resolve ? "&resolve=local&resolvedepth=2" : "";
+        // Like the importer's ParcelFeatureType.Namespace, for servers that don't know the prefix.
+        var namespaces = typeNamespace is null
+            ? ""
+            : $"&namespaces=xmlns({typeName[..typeName.IndexOf(':', StringComparison.Ordinal)]},{Uri.EscapeDataString(typeNamespace)})";
         // srsName, like the importer sends it: without it a server answers in its own default,
         // which for Saarland is EPSG:4258 — degrees, and in latitude/longitude order.
         var url = $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature" +
                   $"&typenames={Uri.EscapeDataString(typeName)}" +
                   $"&bbox={bbox},{Uri.EscapeDataString(crs)}" +
                   $"&srsName={Uri.EscapeDataString(crs)}" +
-                  $"&count={count}&startIndex=0{resolveSuffix}";
+                  $"&count={count}&startIndex=0{resolveSuffix}{namespaces}";
 
         var response = await Http.GetAsync(url);
         response.EnsureSuccessStatusCode();
