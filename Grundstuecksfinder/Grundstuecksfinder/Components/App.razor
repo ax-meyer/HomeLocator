@@ -4,12 +4,23 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    @* Bootstrap only goes dark through data-bs-theme; set it before first paint and follow the device. *@
+    <script>
+        (function () {
+            var dark = matchMedia("(prefers-color-scheme: dark)");
+            var apply = function () { document.documentElement.setAttribute("data-bs-theme", dark.matches ? "dark" : "light"); };
+            apply();
+            dark.addEventListener("change", apply);
+        })();
+    </script>
     <base href="/" />
     <ResourcePreloader />
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["Grundstuecksfinder.styles.css"]" />
-    <link rel="stylesheet" href="_content/Radzen.Blazor/css/standard.css" />
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/standard.css" media="(prefers-color-scheme: light)" />
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/standard-dark.css" media="(prefers-color-scheme: dark)" />
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.png" />
     <HeadOutlet @rendermode="InteractiveServer" />
