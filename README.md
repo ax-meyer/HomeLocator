@@ -131,7 +131,7 @@ and fastest, each address matched to the parcel containing it. `AddressSource.Ty
 | `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
 | `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
 | `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW, HE |
-| `ParcelLagebezeichnung` | no join: the parcels' own Lagebezeichnung text (see below) | RP |
+| `ParcelLagebezeichnung` | no join: the parcels' own Lagebezeichnung text (see below) | RP, TH |
 
 ```json
 {

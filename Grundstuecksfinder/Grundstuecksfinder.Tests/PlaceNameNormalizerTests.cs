@@ -8,6 +8,8 @@ public class PlaceNameNormalizerTests
 {
     [Theory]
     [InlineData("Stadt Pirna", "Pirna")]
+    [InlineData("Schmalkalden, Kurort", "Schmalkalden")]
+    [InlineData("Steinbach-Hallenberg, Kurort", "Steinbach-Hallenberg")]
     [InlineData("Gemeinde Bahretal", "Bahretal")]
     [InlineData("Stadt Stadt Wehlen", "Stadt Wehlen")]
     [InlineData("Kiel, Landeshauptstadt", "Kiel")]

@@ -38,9 +38,9 @@ public static partial class PlaceNameNormalizer
     /// A trailing municipal title, matched by the head noun its compounds end in rather than by
     /// a fixed list — every state invents its own: ", Stadt" and ", Landeshauptstadt" (SH, SN),
     /// ", Flecken", ", Klosterflecken", ", Inselgemeinde", ", Klostergemeinde", ", Nordseebad"
-    /// and ", Berg- und Universitätsstadt" (NI).
+    /// and ", Berg- und Universitätsstadt" (NI), ", Kurort" (TH).
     /// </summary>
-    [GeneratedRegex(@",\s*[\p{L}\-. ]*?(?:stadt|gemeinde|flecken|bad)$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@",\s*[\p{L}\-. ]*?(?:stadt|gemeinde|flecken|bad|kurort)$", RegexOptions.IgnoreCase)]
     private static partial Regex TitleSuffix();
 
     [GeneratedRegex(@"^(Stadt|Gemeinde)\s+")]
