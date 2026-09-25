@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Threading.RateLimiting;
 using Grundstuecksfinder.Components;
 using Grundstuecksfinder.Data;
 using Grundstuecksfinder.Infrastructure;
@@ -131,20 +130,12 @@ builder.Services.AddHealthChecks()
     .AddCheck<DatabaseHealthCheck>("database")
     .AddCheck<ImportHealthCheck>("imports", failureStatus: HealthStatus.Degraded);
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
-builder.Services.AddRateLimiter(options =>
-{
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 120,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-            }));
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-});
+// ── Search limits ─────────────────────────────────────────────────────────────
+// Searches run over the Blazor circuit, not through the HTTP pipeline, so they are bounded here
+// rather than by a rate-limiting middleware.
+builder.Services.AddSingleton(new SearchLimits());
+builder.Services.AddSingleton<SearchGate>();
+builder.Services.AddScoped<SearchThrottle>();
 
 // ── Build ─────────────────────────────────────────────────────────────────────
 var app = builder.Build();
@@ -167,7 +158,6 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles(); // Must be before UseStatusCodePagesWithReExecute to prevent HTML 404 pages for static assets
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseRateLimiter();
 app.UseAntiforgery();
 
 app.MapHealthChecks("/health");

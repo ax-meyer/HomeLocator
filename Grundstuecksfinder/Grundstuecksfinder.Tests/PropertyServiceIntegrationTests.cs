@@ -33,7 +33,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, DisabledSources.None);
 
-        var result = await service.GetPropertiesAsync(plz: "50667");
+        var result = await service.GetPropertiesAsync(plz: "50667", cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().ContainSingle()
             .Which.Plz.Should().Be("50667");
@@ -54,7 +54,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, DisabledSources.None);
 
-        var result = await service.GetPropertiesAsync(minFlaeche: 400, maxFlaeche: 600);
+        var result = await service.GetPropertiesAsync(minFlaeche: 400, maxFlaeche: 600, cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().ContainSingle()
             .Which.FlaecheAmtl.Should().Be(500);
@@ -121,7 +121,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, new DisabledSources(["he"]));
 
-        (await service.GetPropertiesAsync(minFlaeche: 100)).Should().ContainSingle().Which.Source.Should().Be("nrw");
+        (await service.GetPropertiesAsync(minFlaeche: 100, cancellationToken: TestContext.Current.CancellationToken)).Should().ContainSingle().Which.Source.Should().Be("nrw");
         (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
         (await service.GetDistinctPlzAsync()).Should().Equal("50667");
         (await service.GetTotalPropertyCountAsync()).Should().Be(1);
