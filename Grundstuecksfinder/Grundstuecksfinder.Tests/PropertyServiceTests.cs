@@ -3,6 +3,7 @@ using Grundstuecksfinder.Data;
 using Xunit;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services;
+using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
 
 namespace Grundstuecksfinder.Tests;
@@ -93,5 +94,24 @@ public sealed class PropertyServiceTests : IAsyncLifetime
         var result = await _service.GetPropertiesAsync(limit: 2);
 
         result.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetRetrievalYearsAsync_ReturnsTheYearOfEachServedRun()
+    {
+        // Mid-year, so the server's time zone can't move either date into another year.
+        var niRun = ImportSeed.Completed("ni", new DateTimeOffset(2025, 6, 15, 12, 0, 0, TimeSpan.Zero));
+        var bwRun = ImportSeed.Completed("bw", new DateTimeOffset(2026, 6, 15, 12, 0, 0, TimeSpan.Zero));
+        _context.SourceStates.AddRange(
+            ImportSeed.Serving(niRun),
+            ImportSeed.Serving(bwRun),
+            new SourceState { Source = "sl", LastProbeAt = ImportSeed.Day(1) });
+        // A newer run that failed doesn't count: the rows shown are still from 2025.
+        _context.ImportRuns.Add(ImportSeed.Failed("ni", new DateTimeOffset(2026, 6, 16, 12, 0, 0, TimeSpan.Zero), "boom"));
+        await _context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var years = await _service.GetRetrievalYearsAsync();
+
+        years.Should().BeEquivalentTo(new Dictionary<string, int> { ["ni"] = 2025, ["bw"] = 2026 });
     }
 }
