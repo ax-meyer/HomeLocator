@@ -5,7 +5,7 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Grundstuecksfinder.Services;
 
-public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache cache)
+public partial class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache cache, ILogger<GeocodingService> logger)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(24);
 
@@ -41,8 +41,12 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
             cache.Set(cacheKey, coords.Value, CacheDuration);
             return coords;
         }
-        catch
+        // The card still works without coordinates (the map links search by address instead),
+        // so a failure only costs the pin — but it is logged, or a dead Nominatim goes unnoticed.
+        // Without the address: searches aren't recorded (see the Datenschutz page).
+        catch (Exception ex)
         {
+            LogGeocodingFailed(logger, ex);
             return null;
         }
     }
@@ -73,6 +77,9 @@ public class GeocodingService(IHttpClientFactory httpClientFactory, IMemoryCache
 
         return parts.Count == 0 ? null : string.Join("&", parts);
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Geocoding failed; showing the card without coordinates")]
+    private static partial void LogGeocodingFailed(ILogger logger, Exception exception);
 
     private sealed class NominatimResult
     {

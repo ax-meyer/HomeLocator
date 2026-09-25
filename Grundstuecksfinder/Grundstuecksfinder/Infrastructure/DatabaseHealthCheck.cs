@@ -11,8 +11,10 @@ public class DatabaseHealthCheck(IServiceScopeFactory scopeFactory) : IHealthChe
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.CanConnectAsync(cancellationToken);
-            return HealthCheckResult.Healthy();
+            // CanConnectAsync reports a failed connection as false rather than throwing.
+            return await db.Database.CanConnectAsync(cancellationToken)
+                ? HealthCheckResult.Healthy()
+                : HealthCheckResult.Unhealthy("Can't connect to the database.");
         }
         catch (Exception ex)
         {

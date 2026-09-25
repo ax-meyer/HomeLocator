@@ -7,6 +7,7 @@ using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace Grundstuecksfinder.Tests;
 
@@ -14,6 +15,7 @@ public sealed class GeocodingServiceTests : IDisposable
 {
     private readonly FakeHttpMessageHandler _handler = new();
     private readonly MemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
+    private readonly CapturingLogger<GeocodingService> _logger = new();
     private readonly GeocodingService _service;
 
     public GeocodingServiceTests()
@@ -21,7 +23,7 @@ public sealed class GeocodingServiceTests : IDisposable
         var http = new HttpClient(_handler) { BaseAddress = new Uri("https://nominatim.openstreetmap.org/") };
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient("Nominatim")).Returns(http);
-        _service = new GeocodingService(factory, _cache);
+        _service = new GeocodingService(factory, _cache, _logger);
     }
 
     public void Dispose() => _cache.Dispose();
@@ -61,13 +63,28 @@ public sealed class GeocodingServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GeocodeAsync_HttpFailure_ReturnsNull()
+    public async Task GeocodeAsync_HttpFailure_ReturnsNullAndLogsWithoutTheAddress()
     {
         _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.InternalServerError));
 
         var result = await _service.GeocodeAsync(SampleProperty());
 
         result.Should().BeNull();
+        _logger.MessagesAt(LogLevel.Warning).Should().ContainSingle()
+            .Which.Should().NotContain("Hauptstraße", "searches aren't recorded");
+    }
+
+    [Fact]
+    public async Task GeocodeAsync_NoHit_LogsNothing()
+    {
+        _handler.SetDefault(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]", Encoding.UTF8, "application/json")
+        });
+
+        await _service.GeocodeAsync(SampleProperty());
+
+        _logger.Entries.Should().BeEmpty("an address Nominatim doesn't know is no failure");
     }
 
     [Fact]
