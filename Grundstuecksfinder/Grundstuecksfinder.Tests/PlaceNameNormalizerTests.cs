@@ -10,6 +10,8 @@ public class PlaceNameNormalizerTests
     [InlineData("Stadt Pirna", "Pirna")]
     [InlineData("Schmalkalden, Kurort", "Schmalkalden")]
     [InlineData("Steinbach-Hallenberg, Kurort", "Steinbach-Hallenberg")]
+    [InlineData("Stadtgemeinde Bremen", "Bremen")]
+    [InlineData("Stadtgemeinde Bremerhaven", "Bremerhaven")]
     [InlineData("Gemeinde Bahretal", "Bahretal")]
     [InlineData("Stadt Stadt Wehlen", "Stadt Wehlen")]
     [InlineData("Kiel, Landeshauptstadt", "Kiel")]

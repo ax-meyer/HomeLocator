@@ -13,7 +13,8 @@ public static partial class PlaceNameNormalizer
     /// Strips title prefixes/suffixes and bilingual additions from a Gemeinde/Ort name:
     /// "Stadt Pirna" → "Pirna" (SN), "Kiel, Landeshauptstadt" → "Kiel" (SH),
     /// "Cottbus [Chóśebuz]" → "Cottbus" (BB), "Adelebsen, Flecken" → "Adelebsen" and
-    /// "Juist, Inselgemeinde" → "Juist" (NI). Returns null for blank input.
+    /// "Juist, Inselgemeinde" → "Juist" (NI), "Stadtgemeinde Bremen" → "Bremen" (HB). Returns
+    /// null for blank input.
     /// </summary>
     public static string? NormalizePlace(string? name)
     {
@@ -43,6 +44,7 @@ public static partial class PlaceNameNormalizer
     [GeneratedRegex(@",\s*[\p{L}\-. ]*?(?:stadt|gemeinde|flecken|bad|kurort)$", RegexOptions.IgnoreCase)]
     private static partial Regex TitleSuffix();
 
-    [GeneratedRegex(@"^(Stadt|Gemeinde)\s+")]
+    /// <summary>A leading municipal title: "Stadt Pirna" (SN), "Stadtgemeinde Bremen" (HB).</summary>
+    [GeneratedRegex(@"^(Stadtgemeinde|Stadt|Gemeinde)\s+")]
     private static partial Regex TitlePrefix();
 }

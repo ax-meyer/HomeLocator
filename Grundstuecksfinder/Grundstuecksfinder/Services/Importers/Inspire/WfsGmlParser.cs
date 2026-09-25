@@ -103,6 +103,36 @@ public static class WfsGmlParser
         return new WfsPage<AddressFeature>(addresses, members.Count, SrsNames(doc));
     }
 
+    /// <summary>
+    /// Flat address features (<see cref="Addresses.AddressSourceType.FlatWfs"/>): one child
+    /// element per field, named as <paramref name="fields"/> maps them, and a gml:Point inside.
+    /// Without an Ort, the Gemeinde stands in for it.
+    /// </summary>
+    public static WfsPage<AddressFeature> ParseFlatAddresses(XDocument doc, string localName, Addresses.AddressFieldOptions fields)
+    {
+        var members = TopLevelMembers(doc);
+        var addresses = new List<AddressFeature>(members.Count);
+        foreach (var member in members)
+        {
+            var feature = member.Elements().FirstOrDefault(e => e.Name.LocalName == localName);
+            if (feature is null) continue;
+
+            var point = ParsePoint(feature.Descendants().FirstOrDefault(e => e.Name.LocalName == "Point"));
+            if (point is null) continue; // nothing to join without a location
+
+            var gemeinde = PlaceNameNormalizer.NormalizePlace(Field(feature, fields.Gemeinde));
+            addresses.Add(new AddressFeature(
+                point,
+                PlaceNameNormalizer.NormalizeStreet(Field(feature, fields.Street)),
+                Field(feature, fields.HouseNumber),
+                Field(feature, fields.HouseNumberSuffix),
+                PostalCode.Normalize(Field(feature, fields.Plz)),
+                PlaceNameNormalizer.NormalizePlace(Field(feature, fields.Ort)) ?? gemeinde,
+                gemeinde));
+        }
+        return new WfsPage<AddressFeature>(addresses, members.Count, SrsNames(doc));
+    }
+
     private static List<XElement> TopLevelMembers(XDocument doc) =>
         doc.Root!.Elements().Where(e => e.Name.LocalName == "member").ToList();
 

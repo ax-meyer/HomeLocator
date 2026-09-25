@@ -247,6 +247,65 @@ public sealed class InspireSourceOptionsTests
         errors.Should().ContainSingle(e => e.Contains("AddressSource.OgcApiPageSize"));
     }
 
+    private static InspireSourceOptions ValidFlatWfs()
+    {
+        var options = Valid("hb");
+        options.AddressSource = new AddressSourceOptions
+        {
+            Type = AddressSourceType.FlatWfs,
+            Url = "https://example.org/adressen",
+            TypeName = "app:adressen",
+            Namespace = "http://www.deegree.org/app",
+            Fields = new AddressFieldOptions { Street = "stn", HouseNumber = "hnr", Plz = "plz", Gemeinde = "onm" },
+        };
+        return options;
+    }
+
+    [Fact]
+    public void Validate_ValidFlatWfs_HasNoErrors() =>
+        InspireSourceOptions.Validate([ValidFlatWfs()], []).Should().BeEmpty();
+
+    [Fact]
+    public void Validate_BrokenFlatWfs_IsAllReported()
+    {
+        var broken = ValidFlatWfs();
+        broken.AddressSource.TypeName = "adressen";
+        broken.AddressSource.Namespace = "not a uri";
+        broken.AddressSource.Fields = new AddressFieldOptions { Street = " ", Plz = "" };
+
+        var errors = InspireSourceOptions.Validate([broken], []);
+
+        errors.Should().BeEquivalentTo(
+            "hb: AddressSource.Namespace needs a TypeName with a prefix to bind it to.",
+            "hb: AddressSource.Namespace must be an absolute URI.",
+            "hb: AddressSource.Fields.Street must name the element holding the street.",
+            "hb: AddressSource.Fields.HouseNumber must name the element holding the house number.",
+            "hb: AddressSource.Fields.Plz must not be blank; leave it out to read none.");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("app:")]
+    [InlineData("app: adressen")]
+    public void Validate_FlatWfsWithoutATypeName_IsRejected(string? typeName)
+    {
+        var broken = ValidFlatWfs();
+        broken.AddressSource.TypeName = typeName;
+        broken.AddressSource.Namespace = null;
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle().Which.Should().Contain("AddressSource.TypeName");
+    }
+
+    [Fact]
+    public void Validate_FlatWfsWithoutFields_IsRejected()
+    {
+        var broken = ValidFlatWfs();
+        broken.AddressSource.Fields = null;
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle().Which.Should().Contain("AddressSource.Fields must say");
+    }
+
     private static InspireSourceOptions ValidHkFile()
     {
         var options = Valid("bw");
