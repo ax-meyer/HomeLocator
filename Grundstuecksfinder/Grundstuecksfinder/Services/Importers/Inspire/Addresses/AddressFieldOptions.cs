@@ -23,6 +23,12 @@ public class AddressFieldOptions
     /// <summary>The Gemeinde's name.</summary>
     public string? Gemeinde { get; set; }
 
+    /// <summary>
+    /// The Gemeinde of every address, instead of a <see cref="Gemeinde"/> element: for a city
+    /// state whose data names only its Bezirke and Ortsteile (Berlin).
+    /// </summary>
+    public string? FixedGemeinde { get; set; }
+
     /// <summary>One message per problem, each starting with the offending property's name.</summary>
     public IEnumerable<string> Validate()
     {
@@ -30,10 +36,15 @@ public class AddressFieldOptions
             yield return "Street must name the element holding the street.";
         if (string.IsNullOrWhiteSpace(HouseNumber))
             yield return "HouseNumber must name the element holding the house number.";
-        foreach (var (name, value) in new[] { ("HouseNumberSuffix", HouseNumberSuffix), ("Plz", Plz), ("Ort", Ort), ("Gemeinde", Gemeinde) })
+        foreach (var (name, value) in new[]
+                 {
+                     ("HouseNumberSuffix", HouseNumberSuffix), ("Plz", Plz), ("Ort", Ort), ("Gemeinde", Gemeinde), ("FixedGemeinde", FixedGemeinde),
+                 })
         {
             if (value is not null && string.IsNullOrWhiteSpace(value))
                 yield return $"{name} must not be blank; leave it out to read none.";
         }
+        if (Gemeinde is not null && FixedGemeinde is not null)
+            yield return "FixedGemeinde and Gemeinde exclude each other.";
     }
 }
