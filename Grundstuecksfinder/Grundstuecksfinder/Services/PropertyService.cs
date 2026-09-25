@@ -73,6 +73,20 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
         await VisibleServedSources.MinAsync(s => s.LastCheckedAt ?? s.ServedRun!.CompletedAt);
 
     /// <summary>
+    /// The year each source's served data was fetched, by source slug — the "Jahr des
+    /// Datenbezugs" that attribution lines such as BW's and NI's must carry. Sources without
+    /// served data are missing; disabled ones are included, since their credit stays listed.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, int>> GetRetrievalYearsAsync()
+    {
+        var served = await context.SourceStates
+            .Where(s => s.ServedRun != null)
+            .Select(s => new { s.Source, s.ServedRun!.StartedAt })
+            .ToListAsync();
+        return served.ToDictionary(s => s.Source, s => s.StartedAt.ToLocalTime().Year, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Every import replaces its source's rows, so each source's served run holds that source's
     /// row count. Read from the small SourceStates/ImportRuns tables instead of counting
     /// millions of Properties on every page load.

@@ -1,4 +1,7 @@
 @page "/impressum"
+@inject PropertyService PropertyService
+@inject TimeProvider TimeProvider
+@using Grundstuecksfinder.Services
 
 <PageTitle>Impressum – Grundstücksfinder</PageTitle>
 
@@ -32,7 +35,7 @@
         Die Grundstücksdaten stammen aus den offenen Geodaten der jeweiligen Bundesländer.
     </p>
     <p>
-        Baden-Württemberg: LGL-BW (2026),
+        Baden-Württemberg: LGL-BW (@RetrievalYear("bw")),
         <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noopener">dl-de/by-2-0</a>,
         <a href="https://www.lgl-bw.de" target="_blank" rel="noopener">www.lgl-bw.de</a>
         (Daten geändert: Flurstücke und Adressen verknüpft).
@@ -52,7 +55,7 @@
         <a href="https://www.govdata.de/dl-de/zero-2-0" target="_blank" rel="noopener">Datenlizenz Deutschland – Zero – Version 2.0</a>
     </p>
     <p>
-        Niedersachsen: LGLN (2026),
+        Niedersachsen: LGLN (@RetrievalYear("ni")),
         <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>
         (Daten geändert: Flurstücke und Adressen verknüpft, Postleitzahlen ergänzt).
     </p>
@@ -62,9 +65,12 @@
         (<a href="https://www.govdata.de/dl-de/zero-2-0" target="_blank" rel="noopener">Datenlizenz Deutschland – Zero – Version 2.0</a>).
     </p>
     <p>
-        Saarland: ©LVGL 2022,
+        Saarland: Flurstücke ©LVGL 2022,
         <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noopener">dl-de/by-2-0</a>,
-        <a href="https://www.lvgl.saarland.de" target="_blank" rel="noopener">www.lvgl.saarland.de</a>
+        <a href="https://www.lvgl.saarland.de" target="_blank" rel="noopener">www.lvgl.saarland.de</a>;
+        Hauskoordinaten © GeoBasis DE/LVGL-SL (@RetrievalYear("sl")),
+        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>
+        bzw. <a href="https://www.govdata.de/dl-de/by-2-0" target="_blank" rel="noopener">dl-de/by-2-0</a>
         (Daten geändert: Flurstücke und Adressen verknüpft).
     </p>
     <p>
@@ -77,8 +83,33 @@
         (Daten geändert: Flurstücke und Adressen verknüpft).
     </p>
     <p>
-        Fehlende Postleitzahlen werden aus den Postleitzahlengebieten von OpenStreetMap ergänzt:
+        Fehlende Postleitzahlen werden aus den Postleitzahlengebieten von OpenStreetMap ergänzt, die
+        Koordinaten für die Kartenlinks liefert der OpenStreetMap-Dienst
+        <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a>:
         © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-Mitwirkende</a>,
         verfügbar unter der Open Database License (ODbL).
     </p>
 </div>
+
+@code {
+    private IReadOnlyDictionary<string, int> _retrievalYears = new Dictionary<string, int>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The Impressum must render even with the database down; the years then fall back below.
+        try
+        {
+            _retrievalYears = await PropertyService.GetRetrievalYearsAsync();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// The "Jahr des Datenbezugs" a credit must name: when the served data was fetched, or this
+    /// year when there is none yet (the first import is running or about to).
+    /// </summary>
+    private int RetrievalYear(string source) =>
+        _retrievalYears.TryGetValue(source, out var year) ? year : TimeProvider.GetLocalNow().Year;
+}
