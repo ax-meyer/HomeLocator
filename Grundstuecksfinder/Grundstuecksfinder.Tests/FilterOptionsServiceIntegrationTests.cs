@@ -1,7 +1,11 @@
+using System.Data.Common;
 using FluentAssertions;
+using Grundstuecksfinder.Data;
 using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Tests.TestHelpers;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Xunit;
 
@@ -72,6 +76,43 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
         var options = await GetOptionsAsync();
 
         options.Locations.Should().Equal(Plz("24103"), Plz("50667"), Gemeinde("Kiel"), Gemeinde("Köln"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ManyVisitorsAfterAnImport_BuildTheListsOnce()
+    {
+        await AddImportAsync(1, ("50667", "Köln"));
+        var distinctQueries = new SlowDistinctCounter();
+
+        // Every visitor has its own circuit, so its own context; the slow DISTINCT keeps the
+        // first build going while the others arrive.
+        var results = await Task.WhenAll(Enumerable.Range(0, 10).Select(async _ =>
+        {
+            await using var context = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                .UseNpgsql(fixture.ConnectionString).AddInterceptors(distinctQueries).Options);
+            return await new FilterOptionsService(new PropertyService(context, DisabledSources.None), context, _cache).GetAsync();
+        }));
+
+        distinctQueries.Count.Should().Be(2, "one build is one DISTINCT for the PLZ and one for the Gemeinden");
+        results.Should().AllSatisfy(r => r.Locations.Should().Equal(Plz("50667"), Gemeinde("Köln")));
+    }
+
+    private sealed class SlowDistinctCounter : DbCommandInterceptor
+    {
+        private int _count;
+        public int Count => _count;
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("DISTINCT", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _count);
+                await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+            }
+            return result;
+        }
     }
 
     [Fact]

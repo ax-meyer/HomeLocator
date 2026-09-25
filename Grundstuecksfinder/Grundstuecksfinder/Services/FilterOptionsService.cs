@@ -9,7 +9,7 @@ public sealed record FilterOptions(IReadOnlyList<SearchLocation> Locations);
 
 /// <summary>
 /// Serves the filter dropdowns from memory. Building them takes a DISTINCT over every property
-/// (about a second at ~5M rows), and a prerendered page asks twice per visit, yet they only change
+/// (seconds at ~18M rows), and a prerendered page asks twice per visit, yet they only change
 /// when an import swaps new rows in — which always makes a new run a source's served run. So the
 /// lists are cached under the set of served runs and rebuilt once after each import.
 /// </summary>
@@ -17,6 +17,10 @@ public class FilterOptionsService(PropertyService properties, AppDbContext conte
 {
     // Only keeps superseded versions from piling up; a current entry is rebuilt at most daily.
     private static readonly TimeSpan MaxAge = TimeSpan.FromDays(1);
+
+    // One rebuild at a time, across all circuits: every visitor arriving right after an import
+    // would otherwise run the same DISTINCT at once. Static because the service is scoped.
+    private static readonly SemaphoreSlim RebuildLock = new(1, 1);
 
     public async Task<FilterOptions> GetAsync()
     {
@@ -26,14 +30,27 @@ public class FilterOptionsService(PropertyService properties, AppDbContext conte
             .OrderBy(s => s.ServedRunId)
             .Select(s => s.ServedRunId)
             .ToListAsync();
-        var dataVersion = string.Join(',', servedRuns);
+        var key = $"filter-options:{string.Join(',', servedRuns)}";
 
-        return (await cache.GetOrCreateAsync($"filter-options:{dataVersion}", async entry =>
+        if (cache.TryGetValue(key, out FilterOptions? options))
+            return options!;
+
+        await RebuildLock.WaitAsync();
+        try
         {
-            entry.AbsoluteExpirationRelativeToNow = MaxAge;
-            return new FilterOptions(SearchLocation.Combine(
+            // Whoever held the lock before may have built this very version.
+            if (cache.TryGetValue(key, out options))
+                return options!;
+
+            options = new FilterOptions(SearchLocation.Combine(
                 await properties.GetDistinctPlzAsync(),
                 await properties.GetDistinctGemeindenAsync()));
-        }))!;
+            cache.Set(key, options, MaxAge);
+            return options;
+        }
+        finally
+        {
+            RebuildLock.Release();
+        }
     }
 }
