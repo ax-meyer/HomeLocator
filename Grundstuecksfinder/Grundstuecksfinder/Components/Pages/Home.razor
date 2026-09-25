@@ -5,6 +5,7 @@
 @inject GeocodingService GeocodingService
 @inject AppMetrics AppMetrics
 @inject SupportedStates SupportedStates
+@using System.Globalization
 @using Grundstuecksfinder.Services
 @using Grundstuecksfinder.Models
 
@@ -80,23 +81,33 @@ else
             }
         </p>
 
-        <RadzenDataGrid TItem="Property" Data="@_properties"
-                        AllowFiltering="true" AllowSorting="true"
-                        AllowPaging="true" PageSize="25"
-                        RowExpand="@OnRowExpand">
-            <Template Context="property">
-                <PropertyDetail Property="property" Coords="_coords.GetValueOrDefault(property.Id)" />
-            </Template>
-            <Columns>
-                <RadzenDataGridColumn TItem="Property" Property="Str"         Title="Straße" />
-                <RadzenDataGridColumn TItem="Property" Property="Hnr"         Title="Nr."      Width="70px" />
-                <RadzenDataGridColumn TItem="Property" Property="HnrZus"      Title="Zusatz"   Width="80px" />
-                <RadzenDataGridColumn TItem="Property" Property="Plz"         Title="PLZ"      Width="80px" />
-                <RadzenDataGridColumn TItem="Property" Property="Ort"         Title="Ort" />
-                <RadzenDataGridColumn TItem="Property" Property="Gemeinde"    Title="Gemeinde" />
-                <RadzenDataGridColumn TItem="Property" Property="FlaecheAmtl" Title="Fläche (m²)" Width="120px" />
-            </Columns>
-        </RadzenDataGrid>
+        <div class="result-cards">
+            <RadzenDataList TItem="Property" Data="@_properties" AllowPaging="true" PageSize="36"
+                            PagerHorizontalAlign="HorizontalAlign.Center" PageNumbersCount="5"
+                            WrapItems="false">
+                <Template Context="property">
+                    @{ var open = _openCards.Contains(property.Id); }
+                    <div class="result-card">
+                        <button type="button" class="result-card-toggle" aria-expanded="@(open ? "true" : "false")"
+                                @onclick="() => ToggleCard(property)">
+                            <span class="result-card-text">
+                                <span class="result-card-street">@StreetLine(property)</span>
+                                <span class="result-card-place">@PlaceLine(property)</span>
+                            </span>
+                            @if (property.FlaecheAmtl is { } flaeche)
+                            {
+                                <span class="result-card-area">@flaeche.ToString("N0", German) m²</span>
+                            }
+                            <RadzenIcon Icon="@(open ? "expand_less" : "expand_more")" />
+                        </button>
+                        @if (open)
+                        {
+                            <PropertyDetail Property="property" Coords="_coords.GetValueOrDefault(property.Id)" />
+                        }
+                    </div>
+                </Template>
+            </RadzenDataList>
+        </div>
     }
 }
 else if (_searchRequested)
@@ -110,6 +121,11 @@ else if (_searchError is null)
 
 @code {
     private const int MaxResults = 500;
+
+    private static readonly CultureInfo German = CultureInfo.GetCultureInfo("de-DE");
+
+    // Cards whose links are shown; ids survive paging so a page can be left and come back to.
+    private readonly HashSet<int> _openCards = [];
 
     private SearchLocation? _location;
     private double? _minFlaeche;
@@ -190,6 +206,7 @@ else if (_searchError is null)
                 _searchRequested = false;
                 _searchError = null;
                 _coords.Clear();
+                _openCards.Clear();
                 AppMetrics.RecordSearch();
                 _properties = await SearchThrottle.SearchAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
                 _searched = true;
@@ -207,8 +224,23 @@ else if (_searchError is null)
         }
     }
 
-    private async Task OnRowExpand(Property property)
+    private static string StreetLine(Property p) => $"{p.Str} {p.Hnr}{p.HnrZus}".Trim();
+
+    // "50823 Köln", plus the Gemeinde when it differs from the Ort (a district of a larger municipality).
+    private static string PlaceLine(Property p)
     {
+        var place = $"{p.Plz} {p.Ort}".Trim();
+        return string.IsNullOrWhiteSpace(p.Gemeinde) || p.Gemeinde == p.Ort ? place : $"{place} · {p.Gemeinde}";
+    }
+
+    private async Task ToggleCard(Property property)
+    {
+        if (!_openCards.Add(property.Id))
+        {
+            _openCards.Remove(property.Id);
+            return;
+        }
+
         AppMetrics.RecordTableRowOpen();
         if (_coords.ContainsKey(property.Id)) return;
         var coords = await GeocodingService.GeocodeAsync(property);
