@@ -2,28 +2,27 @@ using System.Net;
 using System.Text;
 using FakeItEasy;
 using FluentAssertions;
-using Grundstuecksfinder.Data;
 using Grundstuecksfinder.Models;
-using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Inspire;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Npgsql;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
 
 /// <summary>
-/// End to end through orchestrator, importer and bulk writer against Postgres: what lands in
-/// Properties/ImportLogs, and that a failed import leaves the previous data and is retried.
+/// End to end through runner, importer and bulk writer against Postgres: what lands in
+/// Properties/ImportRuns, and that a failed import leaves the previous data and is retried.
 /// </summary>
 [Collection("Postgres")]
 public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixture) : IAsyncLifetime
 {
     private const string Source = "sh-test";
-    private const string DatasetName = "sh-alkis-test";
+
+    private readonly FakeTimeProvider _time = new(ImportSeed.Day(100));
 
     public async ValueTask InitializeAsync() => await fixture.ResetAsync();
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -31,7 +30,6 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
     private static InspireSourceOptions BuildOptions() => new()
     {
         Source = Source,
-        DatasetName = DatasetName,
         ParcelWfsUrl = FakeWfsServer.ParcelUrl,
         AddressWfsUrl = FakeWfsServer.AddressUrl,
         Crs = "urn:ogc:def:crs:EPSG::25832",
@@ -55,7 +53,8 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         return server;
     }
 
-    private ImportOrchestrator BuildOrchestrator(FakeWfsServer server, Action<InspireSourceOptions>? tweak = null)
+    /// <summary>One nightly run; the clock stands still, so a served import is never old enough to redo.</summary>
+    private Task RunImportsAsync(FakeWfsServer server, Action<InspireSourceOptions>? tweak = null)
     {
         var options = BuildOptions();
         tweak?.Invoke(options);
@@ -63,19 +62,14 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         var httpFactory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => httpFactory.CreateClient(A<string>._)).ReturnsLazily(() => new HttpClient(server));
 
-        var services = new ServiceCollection();
-        services.AddDbContext<AppDbContext>(o => o.UseNpgsql(fixture.ConnectionString));
-        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
-
         var importer = new InspirePropertyImporter(NullLogger<InspirePropertyImporter>.Instance, httpFactory, options);
-        return new ImportOrchestrator([importer], NullLogger<ImportOrchestrator>.Instance, scopeFactory,
-            new PropertyBulkWriter(fixture.DataSource, batchSize: 1));
+        return fixture.RunImportsAsync([importer], _time, writerBatchSize: 1, ct: TestContext.Current.CancellationToken);
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_ImportsSpatiallyJoinedRows()
+    public async Task RunAsync_ValidData_ImportsSpatiallyJoinedRows()
     {
-        await BuildOrchestrator(TwoParcelServer()).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(TwoParcelServer());
 
         await using var context = fixture.CreateContext();
         var properties = await context.Properties.ToListAsync(TestContext.Current.CancellationToken);
@@ -85,25 +79,24 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_ValidData_CompletesOneImportLogForTheWholeState()
+    public async Task RunAsync_ValidData_CompletesOneRunForTheWholeState()
     {
-        await BuildOrchestrator(TwoParcelServer()).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(TwoParcelServer());
 
         await using var context = fixture.CreateContext();
-        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
-        log.Source.Should().Be(Source);
-        log.DatasetName.Should().Be(DatasetName);
-        log.FileName.Should().Be("statewide");
-        log.FileTimestamp.Should().StartWith("2:2:", "the version is parcel hits, address hits and the month");
-        log.RecordCount.Should().Be(2);
-        log.CompletedAt.Should().NotBeNull();
+        var run = (await context.ImportRuns.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        run.Source.Should().Be(Source);
+        run.Fingerprint.Should().Be("2:2", "the fingerprint is the parcel and address hit counts");
+        run.Reason.Should().Be(ImportReason.Initial);
+        run.RecordCount.Should().Be(2);
+        run.CompletedAt.Should().NotBeNull();
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_TileSkipped_CompletesAndRecordsItOnTheImportLog()
+    public async Task RunAsync_TileSkipped_CompletesAndRecordsItOnTheRun()
     {
         // Four tiles, one parcel each; the address service is permanently broken for one of them.
-        // The import keeps the other three rather than discarding the run, and says so on the log.
+        // The import keeps the other three rather than discarding the run, and says so on the run.
         var server = TwoParcelServer();
         server.Parcels.Add(new FakeParcel("P3", 60, 0, 70, 10, 500));
         server.Addresses.Add(new FakeAddress("A3", 65, 5, "Waldweg", "7"));
@@ -117,43 +110,37 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
             o.MinCompleteness = 0.5; // 2 of 3 addresses; the tolerance itself is tested elsewhere
         }
 
-        await BuildOrchestrator(server, TolerantTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(server, TolerantTiles);
 
         await using var context = fixture.CreateContext();
         (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
             .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße"], "the broken tile's address is missing, the rest is imported");
-        var log = (await context.ImportLogs.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
-        log.CompletedAt.Should().NotBeNull("a tolerated hole is still a completed import");
-        log.LastError.Should().BeNull();
-        log.SkippedTiles.Should().Be(1, "so the import health check can report the hole");
+        var run = (await context.ImportRuns.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
+        run.CompletedAt.Should().NotBeNull("a tolerated hole is still a completed import");
+        run.Error.Should().BeNull();
+        run.SkippedParts.Should().Be(1, "so the import health check can report the hole");
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_AlreadyCompleted_SkipsFetch()
+    public async Task RunAsync_AlreadyCompleted_SkipsFetch()
     {
         var server = TwoParcelServer();
-        await BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(server);
         server.Requests.Clear();
 
-        await BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(server);
 
         server.GetFeatureRequests(FakeWfsServer.ParcelUrl).Should().BeEmpty("the same version was already imported");
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_FailedImport_KeepsPreviousRowsAndRetriesNextRun()
+    public async Task RunAsync_FailedImport_KeepsPreviousRowsAndRetriesNextRun()
     {
         await using (var context = fixture.CreateContext())
         {
-            context.Properties.Add(new Property
-            {
-                Str = "Alte Straße", Hnr = "1", FlaecheAmtl = 1, Source = Source,
-                ImportLog = new ImportLog
-                {
-                    Source = Source, DatasetName = DatasetName, FileName = "statewide", FileTimestamp = "old",
-                    ImportedAt = 1, RecordCount = 1, CompletedAt = 1,
-                },
-            });
+            var old = ImportSeed.Completed(Source, ImportSeed.Epoch, recordCount: 1, fingerprint: "old");
+            context.SourceStates.Add(ImportSeed.Serving(old));
+            context.Properties.Add(new Property { Str = "Alte Straße", Hnr = "1", FlaecheAmtl = 1, Source = Source, ImportRun = old });
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
@@ -167,39 +154,40 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
             ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
             : null;
         void TwoTiles(InspireSourceOptions o) => o.TileSizeMeters = 50;
-        await BuildOrchestrator(server, TwoTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(server, TwoTiles);
 
         await using (var context = fixture.CreateContext())
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().Equal(["Alte Straße"], "a failed import must not replace the previous data");
-            var failed = await context.ImportLogs.SingleAsync(l => l.FileTimestamp != "old", TestContext.Current.CancellationToken);
+            var failed = await context.ImportRuns.SingleAsync(r => r.Fingerprint != "old", TestContext.Current.CancellationToken);
             failed.CompletedAt.Should().BeNull();
+            failed.FailedAt.Should().NotBeNull();
         }
         await AssertStagingEmptyAsync();
 
-        // Next run: the service is back; the same version is retried, reusing its ImportLog row.
+        // Next run: the service is back; the same version is retried as a new run.
         server.Interceptor = null;
-        await BuildOrchestrator(server, TwoTiles).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        await RunImportsAsync(server, TwoTiles);
 
         await using (var context = fixture.CreateContext())
         {
             (await context.Properties.Select(p => p.Str).ToListAsync(TestContext.Current.CancellationToken))
                 .Should().BeEquivalentTo(["Am Kirchhof", "Dorfstraße", "Waldweg"]);
-            var logs = await context.ImportLogs.Where(l => l.FileTimestamp != "old").ToListAsync(TestContext.Current.CancellationToken);
-            logs.Should().ContainSingle().Which.CompletedAt.Should().NotBeNull();
+            var runs = await context.ImportRuns.Where(r => r.Fingerprint != "old").OrderBy(r => r.Id).ToListAsync(TestContext.Current.CancellationToken);
+            runs.Should().HaveCount(2).And.ContainSingle(r => r.CompletedAt != null);
         }
     }
 
     [Fact]
-    public async Task CheckAndImportAsync_HitsRequestFails_DoesNotThrow()
+    public async Task RunAsync_HitsRequestFails_DoesNotThrow()
     {
         var server = TwoParcelServer();
         server.Interceptor = (uri, _) => uri.Query.Contains("resultType=hits")
             ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("", Encoding.UTF8) }
             : null;
 
-        var act = () => BuildOrchestrator(server).CheckAndImportAsync(TestContext.Current.CancellationToken);
+        var act = () => RunImportsAsync(server);
 
         await act.Should().NotThrowAsync();
     }

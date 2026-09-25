@@ -9,15 +9,16 @@ namespace Grundstuecksfinder.Services.Importers;
 /// Rows stream into the unlogged PropertyStaging table via COPY BINARY in short batches, each its
 /// own transaction, so a multi-hour import never holds a transaction open (which would pin
 /// autovacuum's horizon for the whole database). Only once the importer has yielded every row
-/// without failing are they swapped into Properties, in one short transaction that also marks
-/// the <see cref="ImportLog"/> completed — a failed or cancelled import leaves the source's
-/// previous rows untouched.
+/// without failing are they swapped into Properties, in one short transaction that also
+/// completes the <see cref="ImportRun"/> and makes it the source's served run — a failed or
+/// cancelled import leaves the source's previous rows untouched.
 /// </summary>
 public partial class PropertyBulkWriter(
     NpgsqlDataSource dataSource,
     ILogger<PropertyBulkWriter>? logger = null,
     double minRetainedRatio = PropertyBulkWriter.DefaultMinRetainedRatio,
-    int batchSize = PropertyBulkWriter.DefaultBatchSize)
+    int batchSize = PropertyBulkWriter.DefaultBatchSize,
+    TimeProvider? timeProvider = null)
 {
     public const int DefaultBatchSize = 50_000;
 
@@ -28,35 +29,36 @@ public partial class PropertyBulkWriter(
     /// </summary>
     public const double DefaultMinRetainedRatio = 0.98;
 
+    /// <summary>The advisory lock scope of a source's import; its key is the source's ID.</summary>
+    public const string SourceLockScope = "property-import";
+
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(5);
 
-    public async Task<long> WriteAsync(string source, IAsyncEnumerable<Property> properties, int importLogId, CancellationToken ct)
-    {
-        // Two processes importing the same source (a deploy overlap, a dev machine pointed at
-        // prod) would clear and fill the same staging rows. The session-level lock lives as
-        // long as this connection.
-        await using var lockConnection = await dataSource.OpenConnectionAsync(ct);
-        if (!await TryLockSourceAsync(lockConnection, source, ct))
-            throw new InvalidOperationException($"Another import of {source} is already running.");
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
+    /// <summary>
+    /// Replaces the run's source's rows with <paramref name="properties"/> and records the run
+    /// as completed and served. Returns the number of rows swapped in.
+    /// </summary>
+    public async Task<long> WriteAsync(ImportRunContext run, IAsyncEnumerable<Property> properties, CancellationToken ct)
+    {
+        var source = run.Source;
+        // Two processes importing the same source (a deploy overlap, a dev machine pointed at
+        // prod) would clear and fill the same staging rows.
+        await using var sourceLock = await AdvisoryLock.TryAcquireAsync(dataSource, SourceLockScope, source, logger, ct)
+            ?? throw new ImportAlreadyRunningException($"Another import of {source} is already running.");
+
+        // Leftovers of a crashed earlier run must not end up in this one.
+        await ClearStagingAsync(source, ct);
         try
         {
-            // Leftovers of a crashed earlier run must not end up in this one.
-            await ClearStagingAsync(source, ct);
-            try
-            {
-                var count = await StageAsync(source, properties, ct);
-                await SwapAsync(source, importLogId, count, ct);
-                return count;
-            }
-            finally
-            {
-                await TryClearStagingAsync(source);
-            }
+            var count = await StageAsync(source, properties, ct);
+            await SwapAsync(run, count, ct);
+            return count;
         }
         finally
         {
-            await UnlockSourceAsync(lockConnection, source);
+            await TryClearStagingAsync(source);
         }
     }
 
@@ -111,8 +113,9 @@ public partial class PropertyBulkWriter(
         await writer.CompleteAsync(ct);
     }
 
-    private async Task SwapAsync(string source, int importLogId, long count, CancellationToken ct)
+    private async Task SwapAsync(ImportRunContext run, long count, CancellationToken ct)
     {
+        var source = run.Source;
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
 
@@ -136,27 +139,46 @@ public partial class PropertyBulkWriter(
         }
 
         await using (var insert = new NpgsqlCommand("""
-            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", "ImportLogId")
+            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", "ImportRunId")
             SELECT "Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", $2
             FROM "PropertyStaging" WHERE "Source" = $1
             """, conn, tx))
         {
             insert.CommandTimeout = 0;
             insert.Parameters.AddWithValue(source);
-            insert.Parameters.AddWithValue(importLogId);
+            insert.Parameters.AddWithValue(run.RunId);
             await insert.ExecuteNonQueryAsync(ct);
         }
 
-        // In the same transaction, so swapped data is never logged as a failed import (which
-        // would re-import it the next night) and a logged completion always has its data.
+        // In the same transaction, so swapped data is never recorded as a failed import (which
+        // would re-import it the next night), and a completed, served run always has its data.
+        // The fetch has run to its end, so the parts it skipped and the version it really
+        // imported are all known by now.
+        var completedAt = _time.GetUtcNow();
         await using (var complete = new NpgsqlCommand("""
-            UPDATE "ImportLogs" SET "RecordCount" = $2, "CompletedAt" = $3, "LastCheckedAt" = $3, "LastError" = NULL WHERE "Id" = $1
+            UPDATE "ImportRuns" SET "RecordCount" = $2, "SkippedParts" = $3, "CompletedAt" = $4,
+                "Fingerprint" = COALESCE($5, "Fingerprint")
+            WHERE "Id" = $1
             """, conn, tx))
         {
-            complete.Parameters.AddWithValue(importLogId);
+            complete.Parameters.AddWithValue(run.RunId);
             complete.Parameters.AddWithValue(count);
-            complete.Parameters.AddWithValue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            complete.Parameters.AddWithValue(run.SkippedParts);
+            complete.Parameters.AddWithValue(completedAt);
+            complete.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)run.ImportedFingerprint ?? DBNull.Value });
             await complete.ExecuteNonQueryAsync(ct);
+        }
+
+        // Freshly imported data is current as of its completion.
+        await using (var serve = new NpgsqlCommand("""
+            INSERT INTO "SourceStates" ("Source", "ServedRunId", "LastCheckedAt") VALUES ($1, $2, $3)
+            ON CONFLICT ("Source") DO UPDATE SET "ServedRunId" = excluded."ServedRunId", "LastCheckedAt" = excluded."LastCheckedAt"
+            """, conn, tx))
+        {
+            serve.Parameters.AddWithValue(source);
+            serve.Parameters.AddWithValue(run.RunId);
+            serve.Parameters.AddWithValue(completedAt);
+            await serve.ExecuteNonQueryAsync(ct);
         }
 
         await tx.CommitAsync(ct);
@@ -189,32 +211,6 @@ public partial class PropertyBulkWriter(
         }
     }
 
-    private static async Task<bool> TryLockSourceAsync(NpgsqlConnection conn, string source, CancellationToken ct)
-    {
-        await using var command = new NpgsqlCommand(
-            "SELECT pg_try_advisory_lock(hashtext('property-import'), hashtext($1))", conn);
-        command.Parameters.AddWithValue(source);
-        return (bool)(await command.ExecuteScalarAsync(ct))!;
-    }
-
-    private async Task UnlockSourceAsync(NpgsqlConnection conn, string source)
-    {
-        try
-        {
-            await using var command = new NpgsqlCommand(
-                "SELECT pg_advisory_unlock(hashtext('property-import'), hashtext($1))", conn);
-            command.Parameters.AddWithValue(source);
-            await command.ExecuteScalarAsync(CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // A pooled connection keeps session-level advisory locks when it goes back to the
-            // pool; make sure this one is closed instead of reused, which releases the lock.
-            NpgsqlConnection.ClearPool(conn);
-            if (logger is not null) LogUnlockFailed(logger, ex, source);
-        }
-    }
-
     private static async Task WriteNullableTextAsync(NpgsqlBinaryImporter writer, string? value, CancellationToken ct)
     {
         if (value != null)
@@ -225,9 +221,6 @@ public partial class PropertyBulkWriter(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't clear staged rows; the next import of this source clears them")]
     private static partial void LogStagingCleanupFailed(ILogger logger, Exception exception, string source);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: couldn't release the import lock explicitly; closing its connection instead")]
-    private static partial void LogUnlockFailed(ILogger logger, Exception exception, string source);
 }
 
 /// <summary>An import would shrink its source by more than the allowed ratio; not swapped in.</summary>

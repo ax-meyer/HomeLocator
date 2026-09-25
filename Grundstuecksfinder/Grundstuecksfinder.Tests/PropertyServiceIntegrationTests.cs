@@ -3,6 +3,7 @@ using Grundstuecksfinder.Models;
 using Xunit;
 using Grundstuecksfinder.Services;
 using Grundstuecksfinder.Tests.TestHelpers;
+using static Grundstuecksfinder.Tests.TestHelpers.ImportSeed;
 
 namespace Grundstuecksfinder.Tests;
 
@@ -13,26 +14,19 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     /// <summary>
-    /// Property.ImportLogId is a required FK, so every seeded property needs a parent
-    /// import log. Assigning the navigation property lets EF insert both in the right order.
+    /// Property.ImportRunId is a required FK, so every seeded property needs a parent run.
+    /// Assigning the navigation property lets EF insert both in the right order.
     /// </summary>
-    private static ImportLog NewImportLog() => new()
-    {
-        DatasetName = "test",
-        FileName = "test.zip",
-        FileTimestamp = "2026-01-01T00:00:00",
-        ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        RecordCount = 0,
-    };
+    private static ImportRun NewRun() => Completed("nrw", Day(0), recordCount: 0);
 
     [Fact]
     public async Task GetPropertiesAsync_FilterByPlz_ReturnsMatchingRows()
     {
         await using var context = fixture.CreateContext();
-        var importLog = NewImportLog();
+        var run = NewRun();
         context.Properties.AddRange(
-            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 200, ImportLog = importLog },
-            new Property { Str = "Bergstraße", Hnr = "5", Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog }
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 200, ImportRun = run },
+            new Property { Str = "Bergstraße", Hnr = "5", Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportRun = run }
         );
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
@@ -49,11 +43,11 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     public async Task GetPropertiesAsync_FilterBySizeRange_ReturnsCorrectSubset()
     {
         await using var context = fixture.CreateContext();
-        var importLog = NewImportLog();
+        var run = NewRun();
         context.Properties.AddRange(
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 100, ImportLog = importLog },
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportLog = importLog },
-            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 1000, ImportLog = importLog }
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 100, ImportRun = run },
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 500, ImportRun = run },
+            new Property { Plz = "44139", Ort = "Dortmund", Gemeinde = "Dortmund", FlaecheAmtl = 1000, ImportRun = run }
         );
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
@@ -67,7 +61,7 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     }
 
     [Fact]
-    public async Task GetLastCheckedAtAsync_NoLogs_ReturnsNull()
+    public async Task GetLastCheckedAtAsync_NothingServed_ReturnsNull()
     {
         await using var context = fixture.CreateContext();
         var service = new PropertyService(context, DisabledSources.None);
@@ -78,54 +72,50 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     }
 
     [Fact]
-    public async Task GetLastCheckedAtAsync_UsesLatestCheckPerSourceAndOldestAcrossSources()
+    public async Task GetLastCheckedAtAsync_UsesEachSourcesLatestCheckAndTheOldestAcrossSources()
     {
         await using var context = fixture.CreateContext();
-        context.ImportLogs.AddRange(
-            // nrw: imported long ago, confirmed current by a recent check.
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 100, RecordCount = 10, CompletedAt = 100, LastCheckedAt = 900 },
-            // Still running (or failed): never counts.
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = 950, RecordCount = 0 },
+        context.ImportRuns.Add(Failed("nrw", Day(9.5), "boom"));
+        context.SourceStates.AddRange(
+            // nrw: imported long ago, confirmed current by a recent check; the failed retry doesn't count.
+            Serving(Completed("nrw", Day(1), recordCount: 10), lastCheckedAt: Day(9)),
             // sh: last confirmed earlier, so it holds the date back.
-            new ImportLog { Source = "sh", DatasetName = "ds", FileName = "sh", FileTimestamp = "ts1", ImportedAt = 500, RecordCount = 5, CompletedAt = 600, LastCheckedAt = 700 });
+            Serving(Completed("sh", Day(6), recordCount: 5), lastCheckedAt: Day(7)),
+            // hh: no data yet, so nothing to confirm.
+            new SourceState { Source = "hh", LastProbeAt = Day(8) });
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, DisabledSources.None);
 
-        (await service.GetLastCheckedAtAsync()).Should().Be(700);
+        (await service.GetLastCheckedAtAsync()).Should().Be(Day(7));
     }
 
     [Fact]
     public async Task GetLastCheckedAtAsync_NeverChecked_FallsBackToCompletion()
     {
         await using var context = fixture.CreateContext();
-        context.ImportLogs.Add(
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 100, RecordCount = 10, CompletedAt = 400 });
+        var state = Serving(Completed("nrw", Day(4), recordCount: 10));
+        state.LastCheckedAt = null;
+        context.SourceStates.Add(state);
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
         var service = new PropertyService(queryContext, DisabledSources.None);
 
-        (await service.GetLastCheckedAtAsync()).Should().Be(400);
+        (await service.GetLastCheckedAtAsync()).Should().Be(Day(4));
     }
 
     [Fact]
     public async Task DisabledSource_IsHiddenFromSearchFiltersAndCounts()
     {
         await using var context = fixture.CreateContext();
-        var nrwLog = NewImportLog();
-        nrwLog.Source = "nrw";
-        nrwLog.RecordCount = 1;
-        nrwLog.CompletedAt = 1;
-        var heLog = NewImportLog();
-        heLog.Source = "he";
-        heLog.FileName = "he.zip";
-        heLog.RecordCount = 1;
-        heLog.CompletedAt = 1;
+        var nrwRun = Completed("nrw", Day(1), recordCount: 1);
+        var heRun = Completed("he", Day(2), recordCount: 1);
+        context.SourceStates.AddRange(Serving(nrwRun), Serving(heRun));
         context.Properties.AddRange(
-            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Gemeinde = "Köln", FlaecheAmtl = 500, Source = "nrw", ImportLog = nrwLog },
-            new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", FlaecheAmtl = 500, Source = "he", ImportLog = heLog });
+            new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Gemeinde = "Köln", FlaecheAmtl = 500, Source = "nrw", ImportRun = nrwRun },
+            new Property { Str = "Zeil", Hnr = "1", Plz = "60313", Gemeinde = "Frankfurt am Main", FlaecheAmtl = 500, Source = "he", ImportRun = heRun });
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
@@ -135,16 +125,16 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
         (await service.GetDistinctGemeindenAsync()).Should().Equal("Köln");
         (await service.GetDistinctPlzAsync()).Should().Equal("50667");
         (await service.GetTotalPropertyCountAsync()).Should().Be(1);
-        (await service.GetLastCheckedAtAsync()).Should().Be(1, "only the visible nrw import counts");
+        (await service.GetLastCheckedAtAsync()).Should().Be(Day(1), "only the visible nrw import counts");
     }
 
     [Fact]
-    public async Task DisabledSource_WithOnlyItsImportCompleted_HasNoLastCheck()
+    public async Task DisabledSource_WithOnlyItsImportServed_HasNoLastCheck()
     {
         await using var context = fixture.CreateContext();
-        context.ImportLogs.AddRange(
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "nrw.zip", FileTimestamp = "ts", ImportedAt = 1, RecordCount = 0 },
-            new ImportLog { Source = "he", DatasetName = "ds", FileName = "he.zip", FileTimestamp = "ts", ImportedAt = 2, RecordCount = 5, CompletedAt = 2 });
+        context.SourceStates.AddRange(
+            Serving(Completed("nrw", Day(1), recordCount: 0)),
+            Serving(Completed("he", Day(2), recordCount: 5)));
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();
@@ -155,16 +145,17 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     }
 
     [Fact]
-    public async Task GetTotalPropertyCountAsync_SumsLatestCompletedImportPerSource()
+    public async Task GetTotalPropertyCountAsync_SumsEachSourcesServedRun()
     {
         await using var context = fixture.CreateContext();
-        context.ImportLogs.AddRange(
+        context.ImportRuns.AddRange(
             // Superseded by the newer nrw import, which replaced its rows.
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "a.zip", FileTimestamp = "ts1", ImportedAt = 1, RecordCount = 100, CompletedAt = 1 },
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "b.zip", FileTimestamp = "ts2", ImportedAt = 3, RecordCount = 120, CompletedAt = 3 },
+            Completed("nrw", Day(1), recordCount: 100),
             // Failed attempt: its rows were never swapped in.
-            new ImportLog { Source = "nrw", DatasetName = "ds", FileName = "c.zip", FileTimestamp = "ts3", ImportedAt = 4, RecordCount = 0 },
-            new ImportLog { Source = "sh", DatasetName = "ds", FileName = "sh", FileTimestamp = "ts1", ImportedAt = 2, RecordCount = 30, CompletedAt = 2 });
+            Failed("nrw", Day(4), "boom"));
+        context.SourceStates.AddRange(
+            Serving(Completed("nrw", Day(3), recordCount: 120)),
+            Serving(Completed("sh", Day(2), recordCount: 30)));
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await using var queryContext = fixture.CreateContext();

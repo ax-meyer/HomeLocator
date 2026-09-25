@@ -22,13 +22,13 @@
 {
     <div class="alert alert-warning mb-3">
         <strong>Noch keine Daten importiert.</strong>
-        Der automatische Import läuft täglich um 03:00 Uhr UTC.
+        Der erste Import startet automatisch mit der Anwendung und kann einige Stunden dauern.
     </div>
 }
 else
 {
     <p class="text-muted small mb-3">
-        Stand: @DateTimeOffset.FromUnixTimeMilliseconds(_lastCheckedAt.Value).ToLocalTime().ToString("dd.MM.yyyy, HH:mm") Uhr
+        Stand: @_lastCheckedAt.Value.ToLocalTime().ToString("dd.MM.yyyy, HH:mm") Uhr
         · @_totalCount.ToString("N0") Einträge
     </p>
 }
@@ -121,7 +121,7 @@ else
     private bool _searchRequested;
     // A filter changed while a search was running.
     private bool _rerunSearch;
-    private long? _lastCheckedAt;
+    private DateTimeOffset? _lastCheckedAt;
     private long _totalCount;
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
 

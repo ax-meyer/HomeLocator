@@ -15,15 +15,11 @@ public static class DevSeeder
         if (csvPath == null)
         {
             // Fall back to a minimal seed so the app starts without the file
-            var fallbackLog = new ImportLog
+            context.Properties.Add(new Property
             {
-                Source = NrwPropertyImporter.SourceId,
-                DatasetName = "dev-seed", FileName = "fallback", FileTimestamp = "dev",
-                ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), RecordCount = 1,
-            };
-            context.ImportLogs.Add(fallbackLog);
-            context.Properties.Add(
-                new Property { Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 320, Source = NrwPropertyImporter.SourceId, ImportLog = fallbackLog });
+                Str = "Hauptstraße", Hnr = "1", Plz = "50667", Ort = "Köln", Gemeinde = "Köln", FlaecheAmtl = 320,
+                Source = NrwPropertyImporter.SourceId, ImportRun = ServedRun(context, recordCount: 1),
+            });
             await context.SaveChangesAsync();
             return;
         }
@@ -45,20 +41,27 @@ public static class DevSeeder
             }
         }
 
-        var importLog = new ImportLog
-        {
-            Source = NrwPropertyImporter.SourceId,
-            DatasetName = "dev-seed",
-            FileName = Path.GetFileName(csvPath),
-            FileTimestamp = "dev",
-            ImportedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            RecordCount = properties.Count,
-        };
-        context.ImportLogs.Add(importLog);
-        foreach (var p in properties) p.ImportLog = importLog;
+        var run = ServedRun(context, properties.Count);
+        foreach (var p in properties) p.ImportRun = run;
         context.Properties.AddRange(properties);
 
         await context.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// A completed run serving the seeded rows, as a real import would leave it. Its fingerprint
+    /// matches no real version, so the first import run replaces the seed with real data.
+    /// </summary>
+    private static ImportRun ServedRun(AppDbContext context, long recordCount)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = new ImportRun
+        {
+            Source = NrwPropertyImporter.SourceId, Fingerprint = "dev-seed", Reason = ImportReason.Initial,
+            StartedAt = now, CompletedAt = now, RecordCount = recordCount,
+        };
+        context.SourceStates.Add(new SourceState { Source = NrwPropertyImporter.SourceId, ServedRun = run, LastCheckedAt = now });
+        return run;
     }
 
     /// <summary>Walk up the directory tree from the executable to find part.csv.</summary>

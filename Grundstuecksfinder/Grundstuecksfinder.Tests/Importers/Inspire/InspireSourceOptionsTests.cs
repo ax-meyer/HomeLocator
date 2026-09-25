@@ -9,7 +9,6 @@ public sealed class InspireSourceOptionsTests
     private static InspireSourceOptions Valid(string source = "sh") => new()
     {
         Source = source,
-        DatasetName = $"{source}-alkis",
         ParcelWfsUrl = "https://example.org/cp",
         AddressWfsUrl = "https://example.org/ad",
         Crs = "http://www.opengis.net/def/crs/epsg/0/25832",

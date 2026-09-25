@@ -50,7 +50,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     {
         await using var context = CreateContext();
         await context.Database.ExecuteSqlRawAsync(
-            "TRUNCATE TABLE \"Properties\", \"ImportLogs\", \"PropertyStaging\" RESTART IDENTITY");
+            "TRUNCATE TABLE \"Properties\", \"SourceStates\", \"ImportRuns\", \"PropertyStaging\" RESTART IDENTITY");
     }
 }
 

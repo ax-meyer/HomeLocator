@@ -5,10 +5,11 @@ official open data ("Grundsteuer") published by German states, stores it in
 Postgres, and lets you search parcels by postal code, municipality, and area (m²) through a
 Blazor Server web UI — with geocoded map markers via OpenStreetMap/Nominatim.
 
-Currently ships with an importer for **North Rhine-Westphalia (NRW)**. The import pipeline is
-built around a pluggable `IPropertyImporter` interface, so adding another Bundesland (or
-country) is a matter of writing one importer class — no changes to the shared import,
-storage, or search code required.
+Currently ships with sources for **North Rhine-Westphalia (NRW)** and the states that publish
+their cadastre as separate INSPIRE parcel and address services (configured under
+`Import:Inspire:Sources`). The import pipeline is built around a pluggable `IPropertySource`
+interface, so adding another Bundesland (or country) is a matter of writing one source class —
+no changes to the shared import, scheduling, storage, or search code required.
 
 ![Grundstücksfinder screenshot](grundstuecksfinder.png)
 
@@ -16,9 +17,10 @@ storage, or search code required.
 
 - Search parcels by PLZ, Gemeinde, and min/max area
 - Map view with geocoded markers (Nominatim, cached to respect its usage policy)
-- Automatic daily import of new open-data releases, deduplicated per dataset/file/version
+- Automatic imports of new open-data releases, planned per source (see [Import schedule](#import-schedule))
 - Multiple data sources can coexist without one import wiping another's rows
-- Import history (`ImportLog`) shown per source
+- Import history (`ImportRuns`) and per-source state (`SourceStates`) in the database; failed
+  imports and known holes show up on `/health`
 
 ## Quick setup
 
@@ -46,8 +48,24 @@ in `docker-compose.yml` if you don't use it).
    ```
 
    The app listens on port `8080` behind Traefik and connects to the bundled `postgres:17-alpine`
-   service. On first startup it downloads and imports the current NRW dataset (this can take a
-   few minutes); the daily import check then runs at 03:00 UTC.
+   service. On first startup it imports every enabled source, one after another (this takes
+   hours for the large states); after that the import check runs nightly at 03:00 UTC.
+
+### Upgrading from a version with `ImportLogs`
+
+The import history was redesigned and all database migrations were squashed into one fresh
+`InitialCreate`. On a database created by an earlier version it fails at startup with
+`relation "..." already exists`. **Drop the database before deploying** this version, e.g.:
+
+```bash
+docker compose stop app
+docker compose exec db dropdb -U homelocator homelocator
+docker compose exec db createdb -U homelocator homelocator
+docker compose up -d app
+```
+
+The first start then imports all sources back to back, which takes hours; the site shows no
+data until the first source completes.
 
 ### Local development
 
@@ -66,18 +84,51 @@ download while developing, set `EnableDevSeeding` to `true` (in `launchSettings.
 environment variable) — this seeds a handful of fake parcels from `part.csv` (or a single
 hardcoded fallback row) instead of hitting the network.
 
-### Adding another region's importer
+### Import schedule
 
-Implement `IPropertyImporter` (see `Services/Importers/Nrw/NrwPropertyImporter.cs` for a
+Every run (at startup and nightly at 03:00 UTC) probes each enabled source cheaply and then
+decides what to import:
+
+- A source without imported data is imported right away; after the database is dropped, all
+  sources are imported back to back in the first run. Sources whose previous attempt failed (or
+  was cut short by a crash) go after the others.
+- A source with an **exact** fingerprint (the publisher's own version marker, e.g. NRW's manifest
+  timestamp) is re-imported as soon as it changes, and an unchanged file is never downloaded
+  again.
+- A source with an **approximate** fingerprint (INSPIRE WFS hit counts, which drift daily in
+  active states) is re-imported when it changed and the data is at least `MinAgeDays` old, or
+  in any case once the data is `MaxAgeDays` old.
+- Such re-imports only happen in the nightly run, at most `MaxRoutineImportsPerRun` of them,
+  most overdue first, so the multi-hour states are spread over several nights; the run at
+  startup only does first imports. A failed import is simply due again in the next run; the
+  previous data stays in place meanwhile. Ages count from when an import started.
+- Only one instance imports at a time (a database-wide lock); another one skips its run.
+
+```json
+"Import": {
+  "Refresh": { "MinAgeDays": 30, "MaxAgeDays": 90, "MaxRoutineImportsPerRun": 1 },
+  "Inspire": { "Sources": [ { "Source": "hh", "Refresh": { "MaxAgeDays": 30 }, ... } ] }
+}
+```
+
+The per-source `Refresh` section is optional and overrides the defaults for that source only
+(ages up to 3650 days). Broken values fail startup.
+
+Downloads (NRW's ~1 GB ZIP and similar files) go to `Import:WorkDirectory`, by default a
+`grundstuecksfinder` directory under the system temp directory, and are deleted once read.
+
+### Adding another region's source
+
+Implement `IPropertySource` (see `Services/Importers/Nrw/NrwPropertyImporter.cs` for a
 CSV-based example) and register it in `Program.cs`:
 
 ```csharp
-builder.Services.AddScoped<IPropertyImporter, YourRegionPropertyImporter>();
+builder.Services.AddScoped<IPropertySource, YourRegionPropertySource>();
 ```
 
-The shared `ImportOrchestrator`/`PropertyBulkWriter` handle dataset dedup, per-source deletes,
-and the Postgres bulk write — your importer only needs to know how to discover and fetch its
-region's data.
+The shared `ImportRunner`/`RefreshPlanner`/`PropertyBulkWriter` handle scheduling, the import
+history, per-source row replacement and the Postgres bulk write — your source only needs to
+know how to probe its upstream version and fetch its region's data.
 
 ## Running tests
 

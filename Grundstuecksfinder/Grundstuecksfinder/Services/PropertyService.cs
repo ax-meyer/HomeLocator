@@ -12,14 +12,15 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
         ? context.Properties
         : context.Properties.Where(p => !disabledSources.Names.Contains(p.Source));
 
-    private IQueryable<ImportLog> VisibleCompletedImports
+    /// <summary>Visible sources that serve rows, each with the run those rows came from.</summary>
+    private IQueryable<SourceState> VisibleServedSources
     {
         get
         {
-            var completed = context.ImportLogs.Where(l => l.CompletedAt != null && l.RecordCount > 0);
+            var served = context.SourceStates.Where(s => s.ServedRun != null && s.ServedRun.RecordCount > 0);
             return disabledSources.Names.Count == 0
-                ? completed
-                : completed.Where(l => !disabledSources.Names.Contains(l.Source));
+                ? served
+                : served.Where(s => !disabledSources.Names.Contains(s.Source));
         }
     }
 
@@ -64,31 +65,18 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
             .ToListAsync();
 
     /// <summary>
-    /// Unix ms up to which all visible data is confirmed current: each source's latest successful
-    /// check (an import, or a later run that found nothing newer), and of those the oldest — a
-    /// source whose checks keep failing holds the date back. Null before the first import.
+    /// Time up to which all visible data is confirmed current: each source's latest confirmation
+    /// (its import, or a later run that found it within its refresh policy), and of those the
+    /// oldest — a source whose checks keep failing holds the date back. Null before the first import.
     /// </summary>
-    public async Task<long?> GetLastCheckedAtAsync()
-    {
-        var checks = await VisibleCompletedImports
-            .GroupBy(l => l.Source)
-            .Select(g => g.Max(l => l.LastCheckedAt ?? l.CompletedAt))
-            .ToListAsync();
-        return checks.Count == 0 ? null : checks.Min();
-    }
+    public async Task<DateTimeOffset?> GetLastCheckedAtAsync() =>
+        await VisibleServedSources.MinAsync(s => s.LastCheckedAt ?? s.ServedRun!.CompletedAt);
 
     /// <summary>
-    /// Every import replaces its source's rows, so the latest completed import per source holds
-    /// that source's row count. Read from the small ImportLogs table instead of counting millions
-    /// of Properties on every page load.
+    /// Every import replaces its source's rows, so each source's served run holds that source's
+    /// row count. Read from the small SourceStates/ImportRuns tables instead of counting
+    /// millions of Properties on every page load.
     /// </summary>
-    public async Task<long> GetTotalPropertyCountAsync()
-    {
-        var imports = await VisibleCompletedImports
-            .Select(l => new { l.Source, l.CompletedAt, l.RecordCount })
-            .ToListAsync();
-        return imports
-            .GroupBy(l => l.Source)
-            .Sum(g => g.MaxBy(l => l.CompletedAt)!.RecordCount);
-    }
+    public async Task<long> GetTotalPropertyCountAsync() =>
+        await VisibleServedSources.SumAsync(s => s.ServedRun!.RecordCount);
 }

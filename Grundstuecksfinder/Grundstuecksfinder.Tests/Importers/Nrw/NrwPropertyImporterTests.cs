@@ -4,6 +4,7 @@ using System.Text;
 using FakeItEasy;
 using FluentAssertions;
 using Grundstuecksfinder.Models;
+using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Nrw;
 using Grundstuecksfinder.Tests.TestHelpers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,14 +15,25 @@ using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Nrw;
 
-public sealed class NrwPropertyImporterTests
+public sealed class NrwPropertyImporterTests : IDisposable
 {
     private const string ManifestUrl = "https://example.invalid/index.json";
     private const string BaseDownloadUrl = "https://example.invalid/";
     private const string ZipFileName = "grundsteuerdaten.zip";
     private const string ZipUrl = BaseDownloadUrl + ZipFileName;
 
-    private static NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800)
+    /// <summary>Per test, so tests running in parallel never share the fixed download name.</summary>
+    private readonly string _workDirectory = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder-test-{Guid.NewGuid():N}");
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_workDirectory))
+            Directory.Delete(_workDirectory, recursive: true);
+    }
+
+    private string DownloadPath => Path.Combine(_workDirectory, NrwPropertyImporter.DownloadFileName);
+
+    private NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(A<string>._)).ReturnsLazily(() => new HttpClient(handler));
@@ -34,7 +46,7 @@ public sealed class NrwPropertyImporterTests
             MaxRetryDelaySeconds = 0,
             DownloadTimeoutSeconds = timeoutSeconds,
         });
-        return new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, factory, options, time);
+        return new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, factory, options, time, _workDirectory);
     }
 
     /// <summary>One CSV row with the 17 columns the NRW column map expects.</summary>
@@ -64,11 +76,91 @@ public sealed class NrwPropertyImporterTests
 
     private static async Task<List<Property>> FetchAllAsync(NrwPropertyImporter importer)
     {
-        var candidates = await importer.DiscoverAsync(TestContext.Current.CancellationToken);
+        var probe = await importer.ProbeAsync(TestContext.Current.CancellationToken);
         var rows = new List<Property>();
-        await foreach (var row in importer.FetchAsync(candidates[0], TestContext.Current.CancellationToken))
+        await foreach (var row in importer.FetchAsync(probe, new ImportRunContext(1, NrwPropertyImporter.SourceId), TestContext.Current.CancellationToken))
             rows.Add(row);
         return rows;
+    }
+
+    private static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(json, Encoding.UTF8, "application/json"),
+    };
+
+    [Fact]
+    public async Task ProbeAsync_FingerprintIsTheNewestEditionsNameAndTimestamp()
+    {
+        // The real manifest keeps every year's edition; only the newest is imported, since each
+        // import replaces all of NRW's rows.
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, () => Json("""
+            {"datasets":[{"name":"grundsteuerdaten","files":[
+              {"name":"grundsteuerdaten_2025.zip","timestamp":"2025-08-20T13:14:42"},
+              {"name":"grundsteuerdaten_2026.zip","timestamp":"2026-06-08T14:19:03"},
+              {"name":"grundsteuerdaten_2024.zip","timestamp":"2025-01-24T21:47:18"}]}]}
+            """));
+
+        var probe = await Importer(handler).ProbeAsync(TestContext.Current.CancellationToken);
+
+        probe.Should().Be(new NrwProbe("grundsteuerdaten_2026.zip", "grundsteuerdaten_2026.zip@2026-06-08T14:19:03"));
+        probe.Kind.Should().Be(FingerprintKind.Exact, "the publisher's own timestamp: an unchanged edition is never downloaded again");
+    }
+
+    [Fact]
+    public async Task ProbeAsync_ManifestWithoutFiles_Fails()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, () => Json("""{"datasets":[]}"""));
+
+        var act = () => Importer(handler).ProbeAsync(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<InvalidDataException>().WithMessage("*lists no files*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_DownloadsIntoTheWorkDirectoryAndDeletesTheFileAfterwards()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+        var importer = Importer(handler);
+        var probe = await importer.ProbeAsync(TestContext.Current.CancellationToken);
+
+        await foreach (var _ in importer.FetchAsync(probe, new ImportRunContext(1, NrwPropertyImporter.SourceId), TestContext.Current.CancellationToken))
+            File.Exists(DownloadPath).Should().BeTrue("the rows are read from the download in the work directory");
+
+        File.Exists(DownloadPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FetchAsync_LeftoverFromAnInterruptedImport_IsReplaced()
+    {
+        Directory.CreateDirectory(_workDirectory);
+        await File.WriteAllTextAsync(DownloadPath, "half a ZIP from a crashed run", TestContext.Current.CancellationToken);
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+
+        var rows = await FetchAllAsync(Importer(handler));
+
+        rows.Should().ContainSingle().Which.Str.Should().Be("Hauptstraße");
+        File.Exists(DownloadPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FetchAsync_DownloadsTheFileTheProbeFound()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(BaseDownloadUrl + "probed.zip", () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+        var probe = new NrwProbe("probed.zip", "probed.zip@2026-01-01T00:00:00");
+
+        var rows = new List<Property>();
+        await foreach (var row in Importer(handler).FetchAsync(probe, new ImportRunContext(1, NrwPropertyImporter.SourceId), TestContext.Current.CancellationToken))
+            rows.Add(row);
+
+        rows.Should().ContainSingle();
+        handler.RequestedUris.Should().NotContain(u => u.ToString() == ManifestUrl, "the probe already said which file");
     }
 
     [Fact]
@@ -106,7 +198,7 @@ public sealed class NrwPropertyImporterTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_ManifestFailsTransiently_IsRetried()
+    public async Task ProbeAsync_ManifestFailsTransiently_IsRetried()
     {
         var handler = new FakeHttpMessageHandler();
         var attempts = 0;
@@ -116,10 +208,10 @@ public sealed class NrwPropertyImporterTests
             return attempts < 2 ? new HttpResponseMessage(HttpStatusCode.BadGateway) : Manifest();
         });
 
-        var candidates = await Importer(handler).DiscoverAsync(TestContext.Current.CancellationToken);
+        var probe = await Importer(handler).ProbeAsync(TestContext.Current.CancellationToken);
 
         attempts.Should().Be(2);
-        candidates.Should().ContainSingle().Which.FileName.Should().Be(ZipFileName);
+        probe.Should().BeOfType<NrwProbe>().Which.FileName.Should().Be(ZipFileName);
     }
 
     /// <summary>
