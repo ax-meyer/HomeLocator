@@ -1,0 +1,66 @@
+.result-card {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+    background: #fff;
+    overflow: hidden;
+}
+
+.result-card-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+}
+
+.result-card-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.result-card-street {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.result-card-place {
+    color: var(--bs-secondary-color);
+    font-size: 0.875rem;
+}
+
+.result-card-area {
+    white-space: nowrap;
+    font-size: 0.875rem;
+}
+
+/* The card is the item: drop the frame Radzen draws around each list item. */
+.result-cards {
+    --rz-datalist-padding: 0;
+    --rz-datalist-background-color: transparent;
+    --rz-datalist-border: 0;
+    --rz-datalist-shadow: none;
+    --rz-datalist-item-padding: 0;
+    --rz-datalist-item-background-color: transparent;
+    --rz-datalist-item-border: 0;
+    --rz-datalist-item-shadow: none;
+    --rz-datalist-item-margin-inline: 0;
+    --rz-datalist-item-margin-block: 0.25rem;
+}
+
+/* As many columns as fit; a phone gets one. */
+.result-cards ::deep .rz-datalist-data {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+    gap: 0.5rem;
+    align-items: start;
+}
+
+.result-cards ::deep .rz-datalist-data > li {
+    margin: 0;
+}

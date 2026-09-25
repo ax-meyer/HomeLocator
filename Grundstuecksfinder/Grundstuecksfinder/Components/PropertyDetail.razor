@@ -12,26 +12,30 @@
         <div class="col d-flex flex-column gap-2">
             <h6 class="mb-2">Karten &amp; Informationen</h6>
 
-            <a href="@GoogleMapsUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+            <a href="@GoogleMapsUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary d-inline-flex justify-content-center align-items-center gap-1"
                @onclick="ClickGoogle">
                 Google Maps
+                @ExternalLinkIcon
             </a>
-            <a href="@OsmUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+            <a href="@OsmUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary d-inline-flex justify-content-center align-items-center gap-1"
                @onclick="ClickOsm">
                 OpenStreetMap
+                @ExternalLinkIcon
             </a>
             @if (LaermUrl is not null)
             {
-                <a href="@LaermUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+                <a href="@LaermUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary d-inline-flex justify-content-center align-items-center gap-1"
                    @onclick="ClickLaerm">
                     Lärmkarte
+                    @ExternalLinkIcon
                 </a>
             }
             @if (HochwasserUrl is not null)
             {
-                <a href="@HochwasserUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary"
+                <a href="@HochwasserUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary d-inline-flex justify-content-center align-items-center gap-1"
                    @onclick="ClickHochwasser">
                     Hochwasserkarte
+                    @ExternalLinkIcon
                 </a>
             }
 
@@ -47,6 +51,14 @@
 
     /// <summary>WGS-84 coordinates; default((double,double)) means not yet resolved.</summary>
     [Parameter] public (double Lat, double Lon) Coords { get; set; }
+
+    // Marks the buttons that leave the site; the hidden text is for screen readers, which would
+    // otherwise get no hint that the link opens elsewhere.
+    private static readonly RenderFragment ExternalLinkIcon = __builder =>
+    {
+        <RadzenIcon Icon="open_in_new" Style="font-size: 1em" />
+        <span class="visually-hidden">(externer Link)</span>
+    };
 
     private string AddressQuery =>
         Uri.EscapeDataString(
