@@ -56,10 +56,12 @@ public sealed partial class ParcelAddressJoin(
         // Loaded before the addresses and the (long) tile loop, so a missing area file fails
         // the import right away.
         var postcodes = await LoadPostcodeAreasAsync(ct);
-        var tileAddresses = await addresses.LoadAsync(probe.Addresses, ct);
+        var probedAddresses = probe.Addresses
+            ?? throw new ArgumentException($"{Source}: the probe has no address part to join.", nameof(probe));
+        var tileAddresses = await addresses.LoadAsync(probedAddresses, ct);
         // Recorded on the run instead of the probe's fingerprint, so the next run compares with
         // the edition actually served rather than importing it a second time.
-        if (tileAddresses.Loaded is { } loaded && loaded != probe.Addresses)
+        if (tileAddresses.Loaded is { } loaded && loaded != probedAddresses)
             run.ReportFingerprint(InspireProbe.Combine(probe.Parcels, loaded).Fingerprint);
         var plzStats = new PlzFillStats();
 
@@ -88,14 +90,14 @@ public sealed partial class ParcelAddressJoin(
                 {
                     tileParcels = await parcels.GetTileAsync(tile, parcelLimit, ct);
                 }
-                catch (Exception ex) when (IsSkippableTileFailure(ex, ct))
+                catch (Exception ex) when (TileWalk.IsSkippableFailure(ex, ct))
                 {
-                    failedTiles.Record(tile, WfsFeatureType.ParcelType, ex);
+                    failedTiles.Record(tile, parcels.TypeName, ex);
                     continue;
                 }
                 if (tileParcels is null)
                 {
-                    foreach (var child in Split(tile))
+                    foreach (var child in TileWalk.Split(tile, options, logger))
                         pending.Push((child, null));
                     continue;
                 }
@@ -107,14 +109,14 @@ public sealed partial class ParcelAddressJoin(
             {
                 found = await tileAddresses.GetAsync(tile, ct);
             }
-            catch (Exception ex) when (IsSkippableTileFailure(ex, ct))
+            catch (Exception ex) when (TileWalk.IsSkippableFailure(ex, ct))
             {
                 failedTiles.Record(tile, WfsFeatureType.AddressType, ex);
                 continue;
             }
             if (found.IsFull)
             {
-                foreach (var child in Split(tile))
+                foreach (var child in TileWalk.Split(tile, options, logger))
                     pending.Push((child, tileParcels.Where(p => child.Intersects(p.Geometry.EnvelopeInternal)).ToList()));
                 continue;
             }
@@ -180,46 +182,6 @@ public sealed partial class ParcelAddressJoin(
         return await postcodeAreas.LoadAsync(options.CrsEpsgCode!.Value, new Envelope(b.MinX, b.MaxX, b.MinY, b.MaxY), ct);
     }
 
-    /// <summary>
-    /// Whether a tile's failure may be skipped rather than fail the import: the transient errors
-    /// whose retries are by now spent. A rejection by the circuit breaker is deliberately not one
-    /// — it means the service as a whole is failing, which must stop the import at once instead
-    /// of burning through the tile budget. Neither is a cancelled import, nor a check on the data
-    /// itself (wrong CRS, a tile still full at the minimum size), which no retry would fix.
-    /// </summary>
-    private static bool IsSkippableTileFailure(Exception ex, CancellationToken ct) =>
-        !ct.IsCancellationRequested && InspireServiceClient.IsTransient(ex);
-
-    /// <summary>The four quarters of a full tile, in the order they should be pushed.</summary>
-    private Tile[] Split(Tile tile)
-    {
-        if (tile.Size / 2 < options.MinTileSizeMeters)
-            throw new InspireImportException(
-                $"{Source}: tile {tile.Bbox} is still full at the minimum tile size; features would be lost.");
-
-        LogSplitTile(logger, Source, tile.Bbox);
-        return tile.Quarters();
-    }
-
-    /// <summary>
-    /// Counts the tiles given up on and enforces <see cref="InspireSourceOptions.MaxFailedTiles"/>:
-    /// one permanently broken tile must not throw away a run's hours of fetched data, while a
-    /// service failing all over must not pass as an import.
-    /// </summary>
-    private sealed class FailedTileBudget(ILogger logger, string source, int max)
-    {
-        public int Count { get; private set; }
-
-        public void Record(Tile tile, string typeName, Exception failure)
-        {
-            Count++;
-            LogTileSkipped(logger, failure, source, typeName, tile.Bbox, Count, max);
-            if (Count > max)
-                throw new InspireImportException(FormattableString.Invariant(
-                    $"{source}: gave up on {Count} tiles (maximum {max}); keeping the previous data."), failure);
-        }
-    }
-
     /// <summary>Fills missing PLZ from the postcode areas and counts how that went.</summary>
     private sealed class PlzFillStats
     {
@@ -250,12 +212,6 @@ public sealed partial class ParcelAddressJoin(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: {Processed} tiles done, {Pending} pending, {Addresses} addresses so far")]
     private static partial void LogProgress(ILogger logger, string source, int processed, int pending, long addresses);
-
-    [LoggerMessage(Level = LogLevel.Debug, Message = "{Source}: tile {TileBbox} is full, splitting it into four")]
-    private static partial void LogSplitTile(ILogger logger, string source, string tileBbox);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Source}: giving up on {What} for tile {TileBbox} and skipping it ({Failed} of at most {MaxFailed} tiles skipped)")]
-    private static partial void LogTileSkipped(ILogger logger, Exception exception, string source, string what, string tileBbox, int failed, int maxFailed);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: fetched {Fetched} of {Expected} addresses ({Completeness:P1}); {Unmatched} had no containing parcel, {FailedTiles} tiles were skipped after repeated failures")]
     private static partial void LogFetchSummary(ILogger logger, string source, long fetched, long expected, double completeness, long unmatched, int failedTiles);

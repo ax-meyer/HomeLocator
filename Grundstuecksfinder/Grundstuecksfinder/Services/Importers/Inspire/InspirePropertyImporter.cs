@@ -7,11 +7,13 @@ using Grundstuecksfinder.Services.Importers.Scheduling;
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
-/// Imports an INSPIRE-split Bundesland: parcels (area + geometry) from its INSPIRE
-/// cp:CadastralParcel WFS, addresses (text + point) from the <see cref="IAddressProvider"/> its
-/// <see cref="InspireSourceOptions.AddressSource"/> names, joined by <see cref="ParcelAddressJoin"/>.
-/// One <see cref="InspireSourceOptions"/> instance = one state; this class only wires the parts
-/// together.
+/// Imports an INSPIRE-split Bundesland: parcels (area + geometry) from its parcel WFS, addresses
+/// (text + point) from the <see cref="IAddressProvider"/> its
+/// <see cref="InspireSourceOptions.AddressSource"/> names, joined by <see cref="ParcelAddressJoin"/>
+/// — or, where the parcels name their own addresses
+/// (<see cref="AddressSourceType.ParcelLagebezeichnung"/>), the parcels alone, read by
+/// <see cref="ParcelLagebezeichnungImport"/>. One <see cref="InspireSourceOptions"/> instance =
+/// one state; this class only wires the parts together.
 /// </summary>
 /// <remarks>
 /// Tiling over the state's bounding box happens inside <see cref="FetchAsync"/> only to bound
@@ -27,7 +29,8 @@ public sealed class InspirePropertyImporter : IPropertySource
     private readonly InspireSourceOptions _options;
     private readonly IPostcodeAreaProvider? _postcodeAreas;
     private readonly InspireParcelProvider _parcels;
-    private readonly IAddressProvider _addresses;
+    /// <summary>Null for <see cref="AddressSourceType.ParcelLagebezeichnung"/>: nothing to join.</summary>
+    private readonly IAddressProvider? _addresses;
 
     public InspirePropertyImporter(
         ILogger<InspirePropertyImporter> logger,
@@ -47,8 +50,10 @@ public sealed class InspirePropertyImporter : IPropertySource
         // One client per source: all of its requests share one pace and one circuit breaker.
         var client = new InspireServiceClient(
             httpClientFactory.CreateClient(HttpClientName), options, logger, timeProvider ?? TimeProvider.System, loggerFactory);
+        var parcelType = options.ParcelFeatureType;
         _parcels = new InspireParcelProvider(
-            new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, WfsFeatureType.ParcelType));
+            new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, parcelType.TypeName, parcelType.Namespace),
+            parcelType);
         _addresses = CreateAddressProvider(client, ImportWorkDirectory.Resolve(workDirectory));
     }
 
@@ -56,11 +61,12 @@ public sealed class InspirePropertyImporter : IPropertySource
 
     public RefreshPolicy RefreshPolicy { get; }
 
-    private IAddressProvider CreateAddressProvider(InspireServiceClient client, string workDirectory)
+    private IAddressProvider? CreateAddressProvider(InspireServiceClient client, string workDirectory)
     {
         var source = _options.AddressSource;
         return source.Type switch
         {
+            AddressSourceType.ParcelLagebezeichnung => null,
             AddressSourceType.InspireWfs => new InspireWfsAddressProvider(AddressWfs(), _options),
             AddressSourceType.InspireWfsStartIndex => new InspireWfsStartIndexAddressProvider(AddressWfs(), _options, _logger),
             AddressSourceType.OgcApiFeatures => new OgcApiFeaturesAddressProvider(client, _options, _logger),
@@ -80,11 +86,17 @@ public sealed class InspirePropertyImporter : IPropertySource
 
     /// <summary>
     /// The cheap checks of both sides, combined: the parcel part first, then the address part
-    /// (see <see cref="InspireProbe"/>). Downloads no data. Throws when a side has nothing
-    /// importable, e.g. a service that reports no feature count.
+    /// (see <see cref="InspireProbe"/>); the parcel part alone where there is no address side.
+    /// Downloads no data. Throws when a side has nothing importable, e.g. a service that reports
+    /// no feature count.
     /// </summary>
-    public async Task<SourceProbe> ProbeAsync(CancellationToken ct) =>
-        InspireProbe.Combine(await _parcels.ProbeAsync(ct), await _addresses.ProbeAsync(ct));
+    public async Task<SourceProbe> ProbeAsync(CancellationToken ct)
+    {
+        var parcels = await _parcels.ProbeAsync(ct);
+        return _addresses is null
+            ? InspireProbe.ParcelsOnly(parcels)
+            : InspireProbe.Combine(parcels, await _addresses.ProbeAsync(ct));
+    }
 
     /// <summary>
     /// Fetches and joins the whole state; tiles given up on are reported to <paramref name="run"/>.
@@ -97,8 +109,10 @@ public sealed class InspirePropertyImporter : IPropertySource
         if (probe is not InspireProbe inspireProbe)
             throw new ArgumentException($"Expected the probe of {nameof(InspirePropertyImporter)}, got {probe.GetType().Name}.", nameof(probe));
 
-        var join = new ParcelAddressJoin(_options, _logger, _parcels, _addresses, _postcodeAreas);
-        await foreach (var property in join.RunAsync(inspireProbe, run, ct))
+        var rows = _addresses is null
+            ? new ParcelLagebezeichnungImport(_options, _logger, _parcels, _postcodeAreas).RunAsync(run, ct)
+            : new ParcelAddressJoin(_options, _logger, _parcels, _addresses, _postcodeAreas).RunAsync(inspireProbe, run, ct);
+        await foreach (var property in rows)
             yield return property;
     }
 }

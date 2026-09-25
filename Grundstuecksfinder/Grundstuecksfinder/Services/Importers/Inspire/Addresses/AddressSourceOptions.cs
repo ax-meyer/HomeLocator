@@ -14,6 +14,13 @@ public enum AddressSourceType
 
     /// <summary>A statewide Hauskoordinaten text file in a ZIP (Baden-Württemberg, Hessen).</summary>
     HkFile,
+
+    /// <summary>
+    /// No address dataset: each parcel names its own addresses as text (the AdV "ALKIS
+    /// vereinfacht" lagebeztxt, Rheinland-Pfalz), so there is nothing to join. Needs
+    /// <see cref="ParcelFeatureTypeOptions.LagebezeichnungField"/>; <see cref="AddressSourceOptions.Url"/> is unused.
+    /// </summary>
+    ParcelLagebezeichnung,
 }
 
 /// <summary>How an <see cref="AddressSourceType.HkFile"/> source finds its current file.</summary>
@@ -93,6 +100,7 @@ public class AddressSourceOptions
     {
         if (!Enum.IsDefined(Type))
             yield return $"Type must be one of {string.Join(", ", Enum.GetNames<AddressSourceType>())}.";
+        if (Type == AddressSourceType.ParcelLagebezeichnung) yield break;
         if (!InspireSourceOptions.IsHttpUrl(Url))
             yield return "Url must be an absolute http(s) URL.";
         if (Type == AddressSourceType.OgcApiFeatures && OgcApiPageSize is < 1 or > MaxOgcApiPageSize)

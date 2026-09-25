@@ -33,6 +33,54 @@ public class WfsGmlParserTests
             .Should().BeTrue("the point lies inside the parcel's exterior ring");
     }
 
+    private static readonly ParcelFeatureTypeOptions AlkisVereinfacht = new()
+    {
+        TypeName = "ave:Flurstueck",
+        AreaField = "flaeche",
+        GemeindeField = "gemeinde",
+        LagebezeichnungField = "lagebeztxt",
+    };
+
+    [Fact]
+    public void ParseParcels_AlkisVereinfacht_ReadsAreaGemeindeAndLagebezeichnung()
+    {
+        using var stream = OpenFixture("parcels_alkis_vereinfacht.gml");
+
+        var page = WfsGmlParser.ParseParcels(stream, AlkisVereinfacht);
+
+        page.MemberCount.Should().Be(3);
+        page.Features.Should().HaveCount(2, "the third parcel has no flaeche and is skipped");
+        page.Features[0].AreaM2.Should().Be(405);
+        page.Features[0].Gemeinde.Should().Be("Mainz");
+        page.Features[0].Lagebezeichnung.Should().Be("Löwenhofstraße 5; Vordere Synagogenstraße 2");
+        page.Features[0].Geometry.Contains(page.Features[0].Geometry.Factory.CreatePoint(new Coordinate(447010, 5539010)))
+            .Should().BeTrue("the MultiSurface's polygon is the parcel");
+        page.Features[1].AreaM2.Should().Be(1210.5);
+        page.Features[1].Lagebezeichnung.Should().BeNull("a blank field reads as none");
+        page.SrsNames.Should().Equal("urn:ogc:def:crs:EPSG::25832");
+    }
+
+    [Fact]
+    public void ParseParcels_FieldsNotConfigured_AreNotRead()
+    {
+        using var stream = OpenFixture("parcels_alkis_vereinfacht.gml");
+
+        var parcels = WfsGmlParser.ParseParcels(stream, new ParcelFeatureTypeOptions { TypeName = "ave:Flurstueck", AreaField = "flaeche" }).Features;
+
+        parcels.Should().HaveCount(2).And.OnlyContain(p => p.Gemeinde == null && p.Lagebezeichnung == null);
+    }
+
+    [Fact]
+    public void ParseParcels_OtherFeatureType_FindsNothing()
+    {
+        using var stream = OpenFixture("parcels_alkis_vereinfacht.gml");
+
+        var page = WfsGmlParser.ParseCadastralParcels(stream);
+
+        page.Features.Should().BeEmpty();
+        page.MemberCount.Should().Be(3, "every member still counts towards a full page");
+    }
+
     [Fact]
     public void ParseAddresses_SkipsFeatureWithoutAGeometry()
     {

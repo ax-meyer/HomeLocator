@@ -37,6 +37,23 @@ public sealed class InspireProbeTests
             .Kind.Should().Be(FingerprintKind.Approximate);
 
     [Fact]
+    public void ParcelsOnly_IsTheParcelPartAlone()
+    {
+        var parcels = new FingerprintPart("6208246", false);
+
+        var probe = InspireProbe.ParcelsOnly(parcels);
+
+        probe.Fingerprint.Should().Be("6208246");
+        probe.Kind.Should().Be(FingerprintKind.Approximate);
+        probe.Parcels.Should().Be(parcels);
+        probe.Addresses.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParcelsOnly_ExactPart_IsExact() =>
+        InspireProbe.ParcelsOnly(new FingerprintPart("\"etag\"", true)).Kind.Should().Be(FingerprintKind.Exact);
+
+    [Fact]
     public void FromCount_IsApproximate() =>
         FingerprintPart.FromCount(42, "parcel").Should().Be(new FingerprintPart("42", false));
 

@@ -33,18 +33,23 @@ public sealed record FingerprintPart(string Value, bool IsExact)
 /// <summary>
 /// An INSPIRE source's probe: the parcel side's part and the address side's, kept apart so the
 /// fetch can hand each provider what its own probe saw (a file provider checks whether its
-/// edition changed in between).
+/// edition changed in between). <see cref="Addresses"/> is null for a source whose parcels name
+/// their own addresses (<see cref="Inspire.Addresses.AddressSourceType.ParcelLagebezeichnung"/>).
 /// </summary>
 /// <remarks>
 /// The fingerprint is the parts' values joined by ':', parcels first. A composite is only as
 /// precise as its weakest part: it is <see cref="FingerprintKind.Exact"/> only when both parts
 /// are, so one WFS hit count makes the whole probe <see cref="FingerprintKind.Approximate"/>.
 /// </remarks>
-public sealed record InspireProbe(string Fingerprint, FingerprintKind Kind, FingerprintPart Parcels, FingerprintPart Addresses)
+public sealed record InspireProbe(string Fingerprint, FingerprintKind Kind, FingerprintPart Parcels, FingerprintPart? Addresses)
     : SourceProbe(Fingerprint, Kind)
 {
     public static InspireProbe Combine(FingerprintPart parcels, FingerprintPart addresses) =>
         new($"{parcels.Value}:{addresses.Value}",
             parcels.IsExact && addresses.IsExact ? FingerprintKind.Exact : FingerprintKind.Approximate,
             parcels, addresses);
+
+    /// <summary>The probe of a source without an address side: the parcel part alone.</summary>
+    public static InspireProbe ParcelsOnly(FingerprintPart parcels) =>
+        new(parcels.Value, parcels.IsExact ? FingerprintKind.Exact : FingerprintKind.Approximate, parcels, null);
 }

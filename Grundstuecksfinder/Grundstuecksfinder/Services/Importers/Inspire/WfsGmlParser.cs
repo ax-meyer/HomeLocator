@@ -4,8 +4,11 @@ using NetTopologySuite.Geometries;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
-/// <summary>A parsed parcel: its official area and its (possibly multi-part) geometry.</summary>
-public sealed record ParcelFeature(Geometry Geometry, double AreaM2);
+/// <summary>
+/// A parsed parcel: its official area and its (possibly multi-part) geometry, plus its Gemeinde
+/// and its Lagebezeichnungen as text where the feature type carries them (ALKIS vereinfacht).
+/// </summary>
+public sealed record ParcelFeature(Geometry Geometry, double AreaM2, string? Gemeinde = null, string? Lagebezeichnung = null);
 
 /// <summary>
 /// One parsed GetFeature response. <see cref="MemberCount"/> counts every returned feature,
@@ -15,36 +18,52 @@ public sealed record ParcelFeature(Geometry Geometry, double AreaM2);
 public sealed record WfsPage<T>(IReadOnlyList<T> Features, int MemberCount, IReadOnlySet<string> SrsNames);
 
 /// <summary>
-/// Parses cp:CadastralParcel and ad:Address WFS GetFeature GML responses. Matches elements by
-/// local name only (not full XName), so it isn't pinned to one INSPIRE schema version/prefix
-/// combination across states. Skips individual malformed features rather than failing the
-/// whole page, mirroring <see cref="DelimitedPropertyParser"/>'s null-tolerant style.
+/// Parses parcel (cp:CadastralParcel, or the feature type a source configures) and ad:Address
+/// WFS GetFeature GML responses. Matches elements by local name only (not full XName), so it
+/// isn't pinned to one INSPIRE schema version/prefix combination across states. Skips
+/// individual malformed features rather than failing the whole page, mirroring
+/// <see cref="DelimitedPropertyParser"/>'s null-tolerant style.
 /// </summary>
 public static class WfsGmlParser
 {
     private static readonly GeometryFactory GeometryFactory = new();
 
-    public static WfsPage<ParcelFeature> ParseCadastralParcels(Stream gml) => ParseCadastralParcels(XDocument.Load(gml));
+    /// <summary>The INSPIRE parcel type the defaults of <see cref="ParcelFeatureTypeOptions"/> describe.</summary>
+    private static readonly ParcelFeatureTypeOptions CadastralParcel = new();
 
-    public static WfsPage<ParcelFeature> ParseCadastralParcels(XDocument doc)
+    public static WfsPage<ParcelFeature> ParseCadastralParcels(Stream gml) => ParseParcels(XDocument.Load(gml), CadastralParcel);
+
+    public static WfsPage<ParcelFeature> ParseCadastralParcels(XDocument doc) => ParseParcels(doc, CadastralParcel);
+
+    public static WfsPage<ParcelFeature> ParseParcels(Stream gml, ParcelFeatureTypeOptions type) => ParseParcels(XDocument.Load(gml), type);
+
+    /// <summary>Parcels of the feature type <paramref name="type"/> describes; ones without an area or a polygon are skipped.</summary>
+    public static WfsPage<ParcelFeature> ParseParcels(XDocument doc, ParcelFeatureTypeOptions type)
     {
         var members = TopLevelMembers(doc);
         var parcels = new List<ParcelFeature>(members.Count);
         foreach (var member in members)
         {
-            var parcel = member.Elements().FirstOrDefault(e => e.Name.LocalName == "CadastralParcel");
+            var parcel = member.Elements().FirstOrDefault(e => e.Name.LocalName == type.LocalName);
             if (parcel is null) continue;
 
-            var areaText = parcel.Elements().FirstOrDefault(e => e.Name.LocalName == "areaValue")?.Value;
-            if (!double.TryParse(areaText, NumberStyles.Any, CultureInfo.InvariantCulture, out var area))
+            if (!double.TryParse(Field(parcel, type.AreaField), NumberStyles.Any, CultureInfo.InvariantCulture, out var area))
                 continue;
 
             var geometry = ParseParcelGeometry(parcel);
             if (geometry is null) continue;
 
-            parcels.Add(new ParcelFeature(geometry, area));
+            parcels.Add(new ParcelFeature(geometry, area, Field(parcel, type.GemeindeField), Field(parcel, type.LagebezeichnungField)));
         }
         return new WfsPage<ParcelFeature>(parcels, members.Count, SrsNames(doc));
+    }
+
+    /// <summary>The text of a feature's child element; null if unnamed, absent or blank.</summary>
+    private static string? Field(XElement feature, string? localName)
+    {
+        if (localName is null) return null;
+        var value = feature.Elements().FirstOrDefault(e => e.Name.LocalName == localName)?.Value;
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     public static WfsPage<AddressFeature> ParseAddresses(Stream gml, bool isCityState = false, bool usePostName = true) =>

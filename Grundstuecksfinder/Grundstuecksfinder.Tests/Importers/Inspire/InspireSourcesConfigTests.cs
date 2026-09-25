@@ -31,6 +31,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("hh", AddressSourceType.InspireWfsStartIndex)]
     [InlineData("he", AddressSourceType.HkFile)]
     [InlineData("sl", AddressSourceType.OgcApiFeatures)]
+    [InlineData("rp", AddressSourceType.ParcelLagebezeichnung)]
     public void ShippedSources_UseTheirAddressSource(string source, AddressSourceType type) =>
         ShippedSources().Single(s => s.Source == source).AddressSource.Type.Should().Be(type);
 
@@ -59,4 +60,21 @@ public sealed class InspireSourcesConfigTests
     [Fact]
     public void ShippedSources_SaarlandKeepsItsOgcApiPageSize() =>
         ShippedSources().Single(s => s.Source == "sl").AddressSource.OgcApiPageSize.Should().Be(2500);
+
+    [Fact]
+    public void ShippedSources_InspireSourcesKeepTheCadastralParcelDefaults() =>
+        ShippedSources().Where(s => s.AddressSource.Type != AddressSourceType.ParcelLagebezeichnung)
+            .Should().OnlyContain(s => s.ParcelFeatureType.TypeName == "cp:CadastralParcel" && s.ParcelFeatureType.AreaField == "areaValue");
+
+    [Fact]
+    public void ShippedSources_RheinlandPfalzReadsTheAlkisVereinfachtParcels()
+    {
+        var rp = ShippedSources().Single(s => s.Source == "rp");
+
+        rp.ParcelFeatureType.TypeName.Should().Be("ave:Flurstueck");
+        rp.ParcelFeatureType.AreaField.Should().Be("flaeche");
+        rp.ParcelFeatureType.GemeindeField.Should().Be("gemeinde");
+        rp.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
+        rp.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
+    }
 }

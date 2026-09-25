@@ -6,8 +6,13 @@ using System.Text;
 
 namespace Grundstuecksfinder.Tests.TestHelpers;
 
-/// <summary>A square-ish parcel for <see cref="FakeWfsServer"/>, in the server's CRS.</summary>
-public sealed record FakeParcel(string Id, double MinX, double MinY, double MaxX, double MaxY, double AreaM2);
+/// <summary>
+/// A square-ish parcel for <see cref="FakeWfsServer"/>, in the server's CRS. Gemeinde and
+/// Lagebezeichnung are only served with <see cref="FakeWfsServer.AlkisVereinfacht"/>.
+/// </summary>
+public sealed record FakeParcel(
+    string Id, double MinX, double MinY, double MaxX, double MaxY, double AreaM2,
+    string? Lagebezeichnung = null, string Gemeinde = "Testgemeinde");
 
 /// <summary>An address point for <see cref="FakeWfsServer"/>, in the server's CRS; Plz null publishes none.</summary>
 public sealed record FakeAddress(string Id, double X, double Y, string Street, string Hnr, string? Plz = null);
@@ -40,6 +45,15 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
     /// <summary>CountDefault advertised in GetCapabilities; null advertises none.</summary>
     public int? AdvertisedCountDefault { get; set; }
+
+    /// <summary>
+    /// Serves the parcels as AdV "ALKIS vereinfacht" ave:Flurstueck (flaeche, gemeinde,
+    /// lagebeztxt) instead of INSPIRE cp:CadastralParcel.
+    /// </summary>
+    public bool AlkisVereinfacht { get; set; }
+
+    /// <summary>numberMatched for resultType=hits on the parcel service; null reports the real count.</summary>
+    public string? ParcelHitsOverride { get; set; }
 
     /// <summary>srsName written on every geometry.</summary>
     public string ResponseSrsName { get; set; } = "urn:ogc:def:crs:EPSG::25832";
@@ -94,7 +108,7 @@ public sealed class FakeWfsServer : HttpMessageHandler
         if (query.GetValueOrDefault("resultType") == "hits")
         {
             var hits = isParcels
-                ? Parcels.Count.ToString(CultureInfo.InvariantCulture)
+                ? ParcelHitsOverride ?? Parcels.Count.ToString(CultureInfo.InvariantCulture)
                 : AddressHitsOverride ?? Addresses.Count.ToString(CultureInfo.InvariantCulture);
             return Xml($"""<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberMatched="{hits}" numberReturned="0"/>""");
         }
@@ -149,13 +163,12 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
     private string ParcelCollection(IEnumerable<FakeParcel> parcels)
     {
+        if (AlkisVereinfacht) return AlkisVereinfachtCollection(parcels);
+
         var sb = new StringBuilder(CollectionStart("http://inspire.ec.europa.eu/schemas/cp/4.0"));
         foreach (var p in parcels)
         {
-            var ring = string.Join(' ', new[]
-            {
-                (p.MinX, p.MinY), (p.MaxX, p.MinY), (p.MaxX, p.MaxY), (p.MinX, p.MaxY), (p.MinX, p.MinY),
-            }.Select(c => FormattableString.Invariant($"{c.Item1} {c.Item2}")));
+            var ring = Ring(p);
             sb.Append(CultureInfo.InvariantCulture, $"""
                 <wfs:member><CadastralParcel gml:id="{p.Id}">
                   <areaValue uom="m2">{p.AreaM2.ToString(CultureInfo.InvariantCulture)}</areaValue>
@@ -167,6 +180,33 @@ public sealed class FakeWfsServer : HttpMessageHandler
         }
         return sb.Append("</wfs:FeatureCollection>").ToString();
     }
+
+    private string AlkisVereinfachtCollection(IEnumerable<FakeParcel> parcels)
+    {
+        var sb = new StringBuilder(CollectionStart("http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/2.0"));
+        foreach (var p in parcels)
+        {
+            var lagebezeichnung = p.Lagebezeichnung is null ? "" : $"<lagebeztxt>{SecurityElement.Escape(p.Lagebezeichnung)}</lagebeztxt>";
+            sb.Append(CultureInfo.InvariantCulture, $"""
+                <wfs:member><Flurstueck gml:id="{p.Id}">
+                  <geometrie><gml:MultiSurface gml:id="{p.Id}_m" srsName="{ResponseSrsName}"><gml:surfaceMember>
+                    <gml:Polygon gml:id="{p.Id}_g"><gml:exterior><gml:LinearRing>
+                      <gml:posList>{Ring(p)}</gml:posList>
+                    </gml:LinearRing></gml:exterior></gml:Polygon>
+                  </gml:surfaceMember></gml:MultiSurface></geometrie>
+                  <flaeche>{p.AreaM2.ToString(CultureInfo.InvariantCulture)}</flaeche>
+                  <gemeinde>{SecurityElement.Escape(p.Gemeinde)}</gemeinde>
+                  {lagebezeichnung}
+                </Flurstueck></wfs:member>
+                """);
+        }
+        return sb.Append("</wfs:FeatureCollection>").ToString();
+    }
+
+    private static string Ring(FakeParcel p) => string.Join(' ', new[]
+    {
+        (p.MinX, p.MinY), (p.MaxX, p.MinY), (p.MaxX, p.MaxY), (p.MinX, p.MaxY), (p.MinX, p.MinY),
+    }.Select(c => FormattableString.Invariant($"{c.Item1} {c.Item2}")));
 
     private string AddressCollection(IEnumerable<FakeAddress> addresses)
     {
