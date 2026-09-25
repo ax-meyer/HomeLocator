@@ -22,10 +22,12 @@ public sealed record LagebezeichnungText(IReadOnlyList<LagebezeichnungAddress> A
 /// </summary>
 /// <remarks>
 /// A part without house numbers is a street or place the parcel merely lies on ("Steingasse",
-/// "Kleingartenanlage") and names no address. What the grammar can't read is skipped rather
-/// than guessed at: field names with numbers in them ("Kurze 5 Morgen", "Ablaßlache
-/// 1.Gewanne"), road descriptions ("Kreisstraße von Harbke zur K1656"), and road numbers that
-/// look like a street and a house number ("B 40": a "street" of one letter).
+/// "Kleingartenanlage") and names no address; neither does a road number, which looks like a
+/// street and a house number ("L 412", "B 40": a "street" of one letter). What the grammar
+/// can't read is skipped rather than guessed at, and counted: field names with numbers in them
+/// ("Kurze 5 Morgen", "Ablaßlache 1.Gewanne"), road descriptions ("Kreisstraße von Harbke zur
+/// K1656"), ranges ("Auf dem Loh 3 -17"). In Rheinland-Pfalz, road numbers were 91 % of what
+/// the grammar doesn't take, field names 8 %.
 /// </remarks>
 public static partial class LagebezeichnungParser
 {
@@ -39,11 +41,12 @@ public static partial class LagebezeichnungParser
         {
             var part = raw.Trim();
             var match = StreetWithNumbers().Match(part);
-            if (!match.Success || match.Groups["street"].Value.Count(char.IsLetter) < 2)
+            if (!match.Success)
             {
                 if (part.Any(char.IsAsciiDigit)) unread++;
                 continue;
             }
+            if (match.Groups["street"].Value.Count(char.IsLetter) < 2) continue; // a road number
 
             var street = match.Groups["street"].Value;
             foreach (var token in match.Groups["numbers"].Value.Split(','))

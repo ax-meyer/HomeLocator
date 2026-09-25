@@ -61,13 +61,25 @@ public sealed class LagebezeichnungParserTests
     [InlineData("Ablaßlache 1.Gewanne")]
     [InlineData("Kreisstraße von Harbke zur K1656")]
     [InlineData("Hofgasse 1 /2")]
-    [InlineData("B 40")]
+    [InlineData("Auf dem Loh 3 -17")]
     public void Parse_UnreadableNumbers_AreCountedNotGuessed(string text)
     {
         var parsed = LagebezeichnungParser.Parse(text);
 
         parsed.Addresses.Should().BeEmpty();
         parsed.UnreadParts.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("L 412")]
+    [InlineData("B 40")]
+    [InlineData("K 49; A 61")]
+    public void Parse_RoadNumbers_NameNoAddress_AndAreNoFailure(string text)
+    {
+        var parsed = LagebezeichnungParser.Parse(text);
+
+        parsed.Addresses.Should().BeEmpty();
+        parsed.UnreadParts.Should().Be(0);
     }
 
     [Fact]
