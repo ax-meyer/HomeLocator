@@ -7,8 +7,9 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
 /// Config for one INSPIRE-split Bundesland: a parcel WFS (area+geometry) and an address source
-/// (text+geometry), joined spatially since neither dataset carries both. Adding a state is
-/// adding an entry to "Import:Inspire:Sources" — no new code.
+/// (text+geometry), joined spatially since neither dataset carries both — or, where the parcels
+/// name their own addresses (<see cref="AddressSourceType.ParcelLagebezeichnung"/>), the parcel
+/// WFS alone. Adding a state is adding an entry to "Import:Inspire:Sources" — no new code.
 /// </summary>
 public partial class InspireSourceOptions
 {
@@ -28,12 +29,15 @@ public partial class InspireSourceOptions
     /// </summary>
     public RefreshOverride? Refresh { get; set; }
 
-    /// <summary>Base URL of the cp:CadastralParcel WFS (INSPIRE download service).</summary>
+    /// <summary>Base URL of the parcel WFS: INSPIRE cp:CadastralParcel, or what <see cref="ParcelFeatureType"/> names.</summary>
     public string ParcelWfsUrl { get; set; } = string.Empty;
 
+    /// <summary>The parcel WFS's feature type and fields; INSPIRE's cp:CadastralParcel unless set.</summary>
+    public ParcelFeatureTypeOptions ParcelFeatureType { get; set; } = new();
+
     /// <summary>
-    /// Where the addresses (text + point) come from. The parcel side is always the INSPIRE
-    /// WFS above; the address side is whichever of the state's datasets is usable and fastest.
+    /// Where the addresses (text + point) come from. The parcel side is always the WFS above;
+    /// the address side is whichever of the state's datasets is usable and fastest.
     /// </summary>
     public AddressSourceOptions AddressSource { get; set; } = new();
 
@@ -196,7 +200,11 @@ public partial class InspireSourceOptions
 
             if (!IsHttpUrl(s.ParcelWfsUrl))
                 errors.Add($"{name}: ParcelWfsUrl must be an absolute http(s) URL.");
+            errors.AddRange(s.ParcelFeatureType.Validate().Select(e => $"{name}: ParcelFeatureType.{e}"));
             errors.AddRange(s.AddressSource.Validate().Select(e => $"{name}: AddressSource.{e}"));
+            if (s.AddressSource.Type == AddressSourceType.ParcelLagebezeichnung
+                && (s.ParcelFeatureType.LagebezeichnungField is null || s.ParcelFeatureType.GemeindeField is null))
+                errors.Add($"{name}: AddressSource.Type {AddressSourceType.ParcelLagebezeichnung} needs ParcelFeatureType.LagebezeichnungField and GemeindeField.");
             if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
                 errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
 

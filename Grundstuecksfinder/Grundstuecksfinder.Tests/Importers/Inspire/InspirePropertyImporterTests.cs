@@ -978,6 +978,6 @@ public sealed class InspirePropertyImporterTests
 
         probe.Fingerprint.Should().Be("4:\"4607dc5-656a14021d8ec\"|2026-07-15T07:27:05Z");
         probe.Kind.Should().Be(FingerprintKind.Approximate, "the parcel count from the WFS is only approximate");
-        probe.Should().BeOfType<InspireProbe>().Which.Addresses.IsExact.Should().BeTrue("the file's own version is exact");
+        probe.Should().BeOfType<InspireProbe>().Which.Addresses!.IsExact.Should().BeTrue("the file's own version is exact");
     }
 }

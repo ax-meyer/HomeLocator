@@ -33,6 +33,39 @@ public sealed class InspireSourceOptionsTests
         InspireSourceOptions.Validate([Valid("sh"), Valid("bw")], ["nrw"]).Should().BeEmpty();
 
     [Fact]
+    public void Validate_ParcelLagebezeichnung_NeedsNoAddressUrl()
+    {
+        var source = Valid("rp");
+        source.ParcelFeatureType = new ParcelFeatureTypeOptions
+        {
+            TypeName = "ave:Flurstueck", AreaField = "flaeche", GemeindeField = "gemeinde", LagebezeichnungField = "lagebeztxt",
+        };
+        source.AddressSource = new AddressSourceOptions { Type = AddressSourceType.ParcelLagebezeichnung };
+
+        InspireSourceOptions.Validate([source], []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ParcelLagebezeichnung_WithoutItsFields_IsRejected()
+    {
+        var source = Valid("rp");
+        source.AddressSource = new AddressSourceOptions { Type = AddressSourceType.ParcelLagebezeichnung };
+
+        InspireSourceOptions.Validate([source], []).Should().ContainSingle()
+            .Which.Should().Contain("LagebezeichnungField and GemeindeField");
+    }
+
+    [Fact]
+    public void Validate_BrokenParcelFeatureType_IsReported()
+    {
+        var source = Valid();
+        source.ParcelFeatureType = new ParcelFeatureTypeOptions { AreaField = "" };
+
+        InspireSourceOptions.Validate([source], []).Should().ContainSingle()
+            .Which.Should().StartWith("sh: ParcelFeatureType.AreaField");
+    }
+
+    [Fact]
     public void Validate_DuplicateOrReservedSource_IsRejected()
     {
         // Each source's import replaces all rows with its Source, so two entries sharing one

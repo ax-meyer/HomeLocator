@@ -4,28 +4,43 @@ using System.Xml.Linq;
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
-/// One feature type of a WFS 2.0 download service (cp:CadastralParcel, ad:Address) and the few
-/// requests the import makes of it: its feature count, its page-size limit, and GetFeature
-/// pages by bbox or by startIndex. Every response is checked for being a complete feature
-/// collection in the source's CRS before it is used.
+/// One feature type of a WFS 2.0 download service (cp:CadastralParcel, ad:Address,
+/// ave:Flurstueck) and the few requests the import makes of it: its feature count, its page-size
+/// limit, and GetFeature pages by bbox or by startIndex. Every response is checked for being a
+/// complete feature collection in the source's CRS before it is used. A typeNamespace binds the
+/// type name's prefix via NAMESPACES on every request, for servers that don't resolve the prefix
+/// on their own; null sends none.
 /// </summary>
 public sealed partial class WfsFeatureType(
     InspireServiceClient client,
     InspireSourceOptions options,
     ILogger logger,
     string baseUrl,
-    string typeName)
+    string typeName,
+    string? typeNamespace = null)
 {
-    public const string ParcelType = "cp:CadastralParcel";
     public const string AddressType = "ad:Address";
 
     public string TypeName => typeName;
+
+    /// <summary>The type name as a query parameter, with its NAMESPACES binding if one is configured.</summary>
+    private string TypeParameters
+    {
+        get
+        {
+            var typeNames = $"&typenames={Uri.EscapeDataString(typeName)}";
+            var colon = typeName.IndexOf(':', StringComparison.Ordinal);
+            return typeNamespace is null || colon <= 0
+                ? typeNames
+                : $"{typeNames}&namespaces=xmlns({Uri.EscapeDataString(typeName[..colon])},{Uri.EscapeDataString(typeNamespace)})";
+        }
+    }
 
     /// <summary>numberMatched of a resultType=hits request; null if the server doesn't say.</summary>
     public Task<long?> GetHitsAsync(CancellationToken ct)
     {
         var url = FormattableString.Invariant(
-            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames={Uri.EscapeDataString(typeName)}&resultType=hits");
+            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature{TypeParameters}&resultType=hits");
         return client.ExecuteAsync(async token =>
         {
             var doc = await client.ReadXmlAsync(url, token);
@@ -91,7 +106,7 @@ public sealed partial class WfsFeatureType(
         // default differs (e.g. Hessen defaults to EPSG:4258 but supports 25832).
         var crs = Uri.EscapeDataString(options.Crs);
         var url = FormattableString.Invariant(
-            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature&typenames={Uri.EscapeDataString(typeName)}{filter}&srsName={crs}&count={count}{resolveSuffix}");
+            $"{baseUrl}?service=WFS&version=2.0.0&request=GetFeature{TypeParameters}{filter}&srsName={crs}&count={count}{resolveSuffix}");
 
         var page = await client.ExecuteAsync(async token =>
         {

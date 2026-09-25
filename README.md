@@ -122,7 +122,7 @@ Downloads (NRW's ~1 GB ZIP and similar files) go to `Import:WorkDirectory`, by d
 
 These states publish no dataset carrying both an address and a parcel's official area, so each
 import joins two: parcels (official area + outline) from the state's INSPIRE `cp:CadastralParcel`
-WFS, fetched tile by tile, and addresses from whichever of the state's address datasets is usable
+WFS (or another parcel feature type, see below), fetched tile by tile, and addresses from whichever of the state's address datasets is usable
 and fastest, each address matched to the parcel containing it. `AddressSource.Type` picks it:
 
 | Type | Addresses from | Used by |
@@ -131,6 +131,7 @@ and fastest, each address matched to the parcel containing it. `AddressSource.Ty
 | `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
 | `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
 | `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW, HE |
+| `ParcelLagebezeichnung` | no join: the parcels' own Lagebezeichnung text (see below) | RP |
 
 ```json
 {
@@ -161,6 +162,35 @@ Only the qualities in `AllowedQualities` (default A and B) are imported: BW's qu
 carry house numbers made up from their coordinates. An Ortsteil that only numbers a district
 (HE's "Frankfurt Bezirk 32") is ignored in favour of the Gemeinde. Sources without a PLZ get the
 one of the OpenStreetMap postcode area around them (`FillMissingPlzFromPostcodeAreas`).
+
+#### Parcels that name their own addresses
+
+Where a state's INSPIRE service is missing or worse, `ParcelFeatureType` points the parcel side
+at another feature type of its parcel WFS — typically the AdV "ALKIS vereinfacht" `ave:Flurstueck`,
+whose parcels carry their official area (`flaeche`), their Gemeinde, and their Lagebezeichnungen
+as text (`lagebeztxt`: "Löwenhofstraße 5; Vordere Synagogenstraße 2, 2 A"). With
+`AddressSource.Type` `ParcelLagebezeichnung` there is then nothing to join: every address a
+parcel names becomes a row with that parcel's area — an address two parcels both name becomes
+two rows. Completeness is checked in parcels, the PLZ comes from the postcode area around the
+parcel, and `Namespace` binds the type's prefix for servers that need a WFS `NAMESPACES`
+parameter.
+
+```json
+{
+  "Source": "rp",
+  "ParcelWfsUrl": "https://geo5.service24.rlp.de/wfs/alkis_rp.fcgi",
+  "ParcelFeatureType": {
+    "TypeName": "ave:Flurstueck",
+    "AreaField": "flaeche",
+    "GemeindeField": "gemeinde",
+    "LagebezeichnungField": "lagebeztxt"
+  },
+  "AddressSource": { "Type": "ParcelLagebezeichnung" },
+  "Crs": "urn:ogc:def:crs:EPSG::25832",
+  "BoundingBox": { "MinX": 280000, "MinY": 5410000, "MaxX": 480000, "MaxY": 5660000 },
+  "FillMissingPlzFromPostcodeAreas": true
+}
+```
 
 ### Adding another region's source
 
