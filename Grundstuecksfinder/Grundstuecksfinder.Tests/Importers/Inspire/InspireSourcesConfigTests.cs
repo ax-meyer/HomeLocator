@@ -33,6 +33,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("sl", AddressSourceType.OgcApiFeatures)]
     [InlineData("rp", AddressSourceType.ParcelLagebezeichnung)]
     [InlineData("th", AddressSourceType.ParcelLagebezeichnung)]
+    [InlineData("hb", AddressSourceType.FlatWfs)]
     public void ShippedSources_UseTheirAddressSource(string source, AddressSourceType type) =>
         ShippedSources().Single(s => s.Source == source).AddressSource.Type.Should().Be(type);
 
@@ -64,7 +65,7 @@ public sealed class InspireSourcesConfigTests
 
     [Fact]
     public void ShippedSources_InspireSourcesKeepTheCadastralParcelDefaults() =>
-        ShippedSources().Where(s => s.AddressSource.Type != AddressSourceType.ParcelLagebezeichnung)
+        ShippedSources().Where(s => s.AddressSource.Type is not (AddressSourceType.ParcelLagebezeichnung or AddressSourceType.FlatWfs))
             .Should().OnlyContain(s => s.ParcelFeatureType.TypeName == "cp:CadastralParcel" && s.ParcelFeatureType.AreaField == "areaValue");
 
     [Fact]
@@ -90,5 +91,22 @@ public sealed class InspireSourcesConfigTests
         th.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
         th.PageSize.Should().Be(1000, "5,000 parcels take the server 43 s, 1,000 only 2 s");
         th.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
+    }
+
+    [Fact]
+    public void ShippedSources_BremenJoinsItsNativeAddressesWithTheirPlz()
+    {
+        var hb = ShippedSources().Single(s => s.Source == "hb");
+
+        hb.ParcelFeatureType.TypeName.Should().Be("app:flurstuecke");
+        hb.ParcelFeatureType.Namespace.Should().Be("http://www.deegree.org/app", "deegree counts nothing without it");
+        hb.ParcelFeatureType.AreaField.Should().Be("flaeche");
+        hb.AddressSource.TypeName.Should().Be("app:adressen");
+        hb.AddressSource.Namespace.Should().Be("http://www.deegree.org/app");
+        hb.AddressSource.Fields.Should().BeEquivalentTo(new AddressFieldOptions
+        {
+            Street = "stn", HouseNumber = "hnr", HouseNumberSuffix = "adz", Plz = "plz", Ort = "onm", Gemeinde = "onm",
+        });
+        hb.FillMissingPlzFromPostcodeAreas.Should().BeFalse("every address carries its PLZ");
     }
 }

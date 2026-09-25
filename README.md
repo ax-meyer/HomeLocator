@@ -131,6 +131,7 @@ and fastest, each address matched to the parcel containing it. `AddressSource.Ty
 | `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
 | `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
 | `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW, HE |
+| `FlatWfs` | a WFS with flat address features (`TypeName`, `Fields` map the elements) | HB |
 | `ParcelLagebezeichnung` | no join: the parcels' own Lagebezeichnung text (see below) | RP, TH |
 
 ```json
@@ -173,7 +174,7 @@ as text (`lagebeztxt`: "Löwenhofstraße 5; Vordere Synagogenstraße 2, 2 A"). W
 parcel names becomes a row with that parcel's area — an address two parcels both name becomes
 two rows. Completeness is checked in parcels, the PLZ comes from the postcode area around the
 parcel, and `Namespace` binds the type's prefix for servers that need a WFS `NAMESPACES`
-parameter.
+parameter (as does `AddressSource.Namespace` for a `FlatWfs` address type).
 
 ```json
 {

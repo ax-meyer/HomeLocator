@@ -69,6 +69,8 @@ public sealed class InspirePropertyImporter : IPropertySource
             AddressSourceType.ParcelLagebezeichnung => null,
             AddressSourceType.InspireWfs => new InspireWfsAddressProvider(AddressWfs(), _options),
             AddressSourceType.InspireWfsStartIndex => new InspireWfsStartIndexAddressProvider(AddressWfs(), _options, _logger),
+            AddressSourceType.FlatWfs => new FlatWfsAddressProvider(
+                new WfsFeatureType(client, _options, _logger, source.Url, source.TypeName!, source.Namespace), _options),
             AddressSourceType.OgcApiFeatures => new OgcApiFeaturesAddressProvider(client, _options, _logger),
             AddressSourceType.HkFile => new HkFileAddressProvider(client, _options, HkFileLocator(), workDirectory, _logger),
             _ => throw new InvalidOperationException($"{Id}: unknown AddressSource.Type {source.Type}."),

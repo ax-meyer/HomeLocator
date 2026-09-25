@@ -81,6 +81,43 @@ public class WfsGmlParserTests
         page.MemberCount.Should().Be(3, "every member still counts towards a full page");
     }
 
+    private static readonly Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressFieldOptions BremenFields = new()
+    {
+        Street = "stn", HouseNumber = "hnr", HouseNumberSuffix = "adz", Plz = "plz", Ort = "onm", Gemeinde = "onm",
+    };
+
+    [Fact]
+    public void ParseFlatAddresses_ReadsTheMappedFields()
+    {
+        using var stream = OpenFixture("addresses_flat_bremen.gml");
+
+        var page = WfsGmlParser.ParseFlatAddresses(XDocument.Load(stream), "adressen", BremenFields);
+
+        page.MemberCount.Should().Be(3);
+        page.Features.Should().HaveCount(2, "the third address has no point to join by");
+        var first = page.Features[0];
+        (first.Str, first.Hnr, first.HnrZus, first.Plz, first.Ort, first.Gemeinde)
+            .Should().Be(("Mittelstraße", "9", "a", "27568", "Bremerhaven", "Bremerhaven"));
+        first.Location.X.Should().Be(472230.052);
+        first.Location.Y.Should().Be(5932721.821);
+        page.Features[1].HnrZus.Should().BeNull("the element is absent");
+        page.SrsNames.Should().Equal("urn:ogc:def:crs:EPSG::25832");
+    }
+
+    [Fact]
+    public void ParseFlatAddresses_WithoutAnOrtField_UsesTheGemeinde()
+    {
+        using var stream = OpenFixture("addresses_flat_bremen.gml");
+
+        var fields = new Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressFieldOptions
+        {
+            Street = "stn", HouseNumber = "hnr", Gemeinde = "onm",
+        };
+        var address = WfsGmlParser.ParseFlatAddresses(XDocument.Load(stream), "adressen", fields).Features[0];
+
+        (address.Ort, address.Gemeinde, address.Plz, address.HnrZus).Should().Be(("Bremerhaven", "Bremerhaven", null, null));
+    }
+
     [Fact]
     public void ParseAddresses_SkipsFeatureWithoutAGeometry()
     {

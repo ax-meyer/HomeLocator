@@ -16,6 +16,14 @@ public enum AddressSourceType
     HkFile,
 
     /// <summary>
+    /// A WFS whose address features are flat — one child element per field and a point
+    /// geometry, e.g. Bremen's native ALKIS Gebäudeadressen — fetched per tile like
+    /// <see cref="InspireWfs"/>. Needs <see cref="AddressSourceOptions.TypeName"/> and
+    /// <see cref="AddressSourceOptions.Fields"/>.
+    /// </summary>
+    FlatWfs,
+
+    /// <summary>
     /// No address dataset: each parcel names its own addresses as text (the AdV "ALKIS
     /// vereinfacht" lagebeztxt, Rheinland-Pfalz), so there is nothing to join. Needs
     /// <see cref="ParcelFeatureTypeOptions.LagebezeichnungField"/>; <see cref="AddressSourceOptions.Url"/> is unused.
@@ -46,8 +54,9 @@ public class AddressSourceOptions
     public AddressSourceType Type { get; set; } = AddressSourceType.InspireWfs;
 
     /// <summary>
-    /// The WFS base URL for <see cref="AddressSourceType.InspireWfs"/> and
-    /// <see cref="AddressSourceType.InspireWfsStartIndex"/>; the collection's "items" endpoint
+    /// The WFS base URL for <see cref="AddressSourceType.InspireWfs"/>,
+    /// <see cref="AddressSourceType.InspireWfsStartIndex"/> and
+    /// <see cref="AddressSourceType.FlatWfs"/>; the collection's "items" endpoint
     /// for <see cref="AddressSourceType.OgcApiFeatures"/>; for
     /// <see cref="AddressSourceType.HkFile"/> the file itself, or with
     /// <see cref="HkFileLocatorType.HessenDownloadCenter"/> the REST listing of its folder.
@@ -60,6 +69,19 @@ public class AddressSourceOptions
     /// check live before changing this. The WFS types use the source's PageSize instead.
     /// </summary>
     public int OgcApiPageSize { get; set; } = 2500;
+
+    /// <summary><see cref="AddressSourceType.FlatWfs"/>: the address feature type, with its prefix, e.g. "app:adressen".</summary>
+    public string? TypeName { get; set; }
+
+    /// <summary>
+    /// <see cref="AddressSourceType.FlatWfs"/>: the namespace URI of <see cref="TypeName"/>'s
+    /// prefix, sent as NAMESPACES, for servers that don't resolve the prefix on their own
+    /// (Bremen's deegree counts nothing without it). Unset sends none.
+    /// </summary>
+    public string? Namespace { get; set; }
+
+    /// <summary><see cref="AddressSourceType.FlatWfs"/>: which element holds which part of the address.</summary>
+    public AddressFieldOptions? Fields { get; set; }
 
     /// <summary><see cref="AddressSourceType.HkFile"/>: how <see cref="Url"/> leads to the file.</summary>
     public HkFileLocatorType Locator { get; set; } = HkFileLocatorType.StaticUrl;
@@ -105,6 +127,21 @@ public class AddressSourceOptions
             yield return "Url must be an absolute http(s) URL.";
         if (Type == AddressSourceType.OgcApiFeatures && OgcApiPageSize is < 1 or > MaxOgcApiPageSize)
             yield return FormattableString.Invariant($"OgcApiPageSize must be between 1 and {MaxOgcApiPageSize}.");
+        if (Type == AddressSourceType.FlatWfs)
+        {
+            var colon = TypeName?.IndexOf(':', StringComparison.Ordinal) ?? -1;
+            if (string.IsNullOrWhiteSpace(TypeName) || TypeName.Any(char.IsWhiteSpace) || colon == TypeName.Length - 1)
+                yield return "TypeName must name the address feature type, like \"app:adressen\".";
+            else if (Namespace is not null && colon <= 0)
+                yield return "Namespace needs a TypeName with a prefix to bind it to.";
+            if (Namespace is not null && !Uri.TryCreate(Namespace, UriKind.Absolute, out _))
+                yield return "Namespace must be an absolute URI.";
+            if (Fields is null)
+                yield return "Fields must say which elements hold the address.";
+            else
+                foreach (var error in Fields.Validate())
+                    yield return $"Fields.{error}";
+        }
         if (Type != AddressSourceType.HkFile) yield break;
 
         if (!Enum.IsDefined(Locator))

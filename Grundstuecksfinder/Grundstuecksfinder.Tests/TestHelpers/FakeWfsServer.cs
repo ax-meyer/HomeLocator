@@ -14,8 +14,11 @@ public sealed record FakeParcel(
     string Id, double MinX, double MinY, double MaxX, double MaxY, double AreaM2,
     string? Lagebezeichnung = null, string Gemeinde = "Testgemeinde");
 
-/// <summary>An address point for <see cref="FakeWfsServer"/>, in the server's CRS; Plz null publishes none.</summary>
-public sealed record FakeAddress(string Id, double X, double Y, string Street, string Hnr, string? Plz = null);
+/// <summary>
+/// An address point for <see cref="FakeWfsServer"/>, in the server's CRS; Plz null publishes none.
+/// Suffix is only served with <see cref="FakeWfsServer.FlatAddresses"/>.
+/// </summary>
+public sealed record FakeAddress(string Id, double X, double Y, string Street, string Hnr, string? Plz = null, string? Suffix = null);
 
 /// <summary>
 /// In-memory stand-in for a state's parcel + address INSPIRE WFS pair. Answers GetCapabilities,
@@ -51,6 +54,12 @@ public sealed class FakeWfsServer : HttpMessageHandler
     /// lagebeztxt) instead of INSPIRE cp:CadastralParcel.
     /// </summary>
     public bool AlkisVereinfacht { get; set; }
+
+    /// <summary>
+    /// Serves the addresses as flat features like Bremen's native WFS (&lt;adressen&gt; with stn,
+    /// hnr, adz, plz, onm) instead of INSPIRE ad:Address.
+    /// </summary>
+    public bool FlatAddresses { get; set; }
 
     /// <summary>numberMatched for resultType=hits on the parcel service; null reports the real count.</summary>
     public string? ParcelHitsOverride { get; set; }
@@ -203,6 +212,23 @@ public sealed class FakeWfsServer : HttpMessageHandler
         return sb.Append("</wfs:FeatureCollection>").ToString();
     }
 
+    private string FlatAddressCollection(IEnumerable<FakeAddress> addresses)
+    {
+        var sb = new StringBuilder(CollectionStart("http://www.deegree.org/app"));
+        foreach (var a in addresses)
+        {
+            var suffix = a.Suffix is null ? "" : $"<adz>{a.Suffix}</adz>";
+            var plz = a.Plz is null ? "" : $"<plz>{a.Plz}</plz>";
+            sb.Append(CultureInfo.InvariantCulture, $"""
+                <wfs:member><adressen gml:id="{a.Id}">
+                  <hnr>{a.Hnr}</hnr>{suffix}{plz}<onm>Testort</onm><stn>{SecurityElement.Escape(a.Street)}</stn>
+                  <geom><gml:Point gml:id="{a.Id}_p" srsName="{ResponseSrsName}"><gml:pos>{a.X.ToString(CultureInfo.InvariantCulture)} {a.Y.ToString(CultureInfo.InvariantCulture)}</gml:pos></gml:Point></geom>
+                </adressen></wfs:member>
+                """);
+        }
+        return sb.Append("</wfs:FeatureCollection>").ToString();
+    }
+
     private static string Ring(FakeParcel p) => string.Join(' ', new[]
     {
         (p.MinX, p.MinY), (p.MaxX, p.MinY), (p.MaxX, p.MaxY), (p.MinX, p.MaxY), (p.MinX, p.MinY),
@@ -210,6 +236,8 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
     private string AddressCollection(IEnumerable<FakeAddress> addresses)
     {
+        if (FlatAddresses) return FlatAddressCollection(addresses);
+
         var list = addresses.ToList();
         var sb = new StringBuilder(CollectionStart("http://inspire.ec.europa.eu/schemas/ad/4.0"));
         foreach (var a in list)
