@@ -23,6 +23,9 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
         return await service.GetAsync();
     }
 
+    private static SearchLocation Plz(string plz) => new(plz, IsPlz: true);
+    private static SearchLocation Gemeinde(string gemeinde) => new(gemeinde, IsPlz: false);
+
     /// <summary>What an import leaves behind: its rows, and its run as the source's served one.</summary>
     private async Task AddImportAsync(double day, params (string Plz, string Gemeinde)[] rows)
     {
@@ -56,8 +59,7 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
 
         var options = await GetOptionsAsync();
 
-        options.Plz.Should().Equal("50667");
-        options.Gemeinden.Should().Equal("Köln");
+        options.Locations.Should().Equal(Plz("50667"), Gemeinde("Köln"));
     }
 
     [Fact]
@@ -69,8 +71,7 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
         await AddImportAsync(2, ("24103", "Kiel"));
         var options = await GetOptionsAsync();
 
-        options.Plz.Should().Equal("24103", "50667");
-        options.Gemeinden.Should().Equal("Kiel", "Köln");
+        options.Locations.Should().Equal(Plz("24103"), Plz("50667"), Gemeinde("Kiel"), Gemeinde("Köln"));
     }
 
     [Fact]
@@ -78,7 +79,6 @@ public sealed class FilterOptionsServiceIntegrationTests(PostgresFixture fixture
     {
         var options = await GetOptionsAsync();
 
-        options.Plz.Should().BeEmpty();
-        options.Gemeinden.Should().BeEmpty();
+        options.Locations.Should().BeEmpty();
     }
 }
