@@ -37,7 +37,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_FilterByPlz_ReturnsOnlyMatchingEntries()
     {
-        var result = await _service.GetPropertiesAsync(plz: "50667");
+        var result = await _service.GetPropertiesAsync(plz: "50667", cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().HaveCount(2)
             .And.AllSatisfy(p => p.Plz.Should().Be("50667"));
@@ -46,7 +46,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_FilterByGemeinde_ReturnsOnlyMatchingEntries()
     {
-        var result = await _service.GetPropertiesAsync(gemeinde: "Dortmund");
+        var result = await _service.GetPropertiesAsync(gemeinde: "Dortmund", cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().HaveCount(2)
             .And.AllSatisfy(p => p.Gemeinde.Should().Be("Dortmund"));
@@ -55,7 +55,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_FilterByMinFlaeche_ExcludesSmallerEntries()
     {
-        var result = await _service.GetPropertiesAsync(plz: "50667", minFlaeche: 500);
+        var result = await _service.GetPropertiesAsync(plz: "50667", minFlaeche: 500, cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().ContainSingle()
             .Which.FlaecheAmtl.Should().Be(600);
@@ -64,7 +64,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_FilterByMaxFlaeche_ExcludesLargerEntries()
     {
-        var result = await _service.GetPropertiesAsync(gemeinde: "Dortmund", maxFlaeche: 500);
+        var result = await _service.GetPropertiesAsync(gemeinde: "Dortmund", maxFlaeche: 500, cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().ContainSingle()
             .Which.FlaecheAmtl.Should().Be(450);
@@ -74,7 +74,8 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     public async Task GetPropertiesAsync_CombinedFilters_ApplyAll()
     {
         var result = await _service.GetPropertiesAsync(
-            gemeinde: "Dortmund", minFlaeche: 1000, maxFlaeche: 2000);
+            gemeinde: "Dortmund", minFlaeche: 1000, maxFlaeche: 2000,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().ContainSingle()
             .Which.FlaecheAmtl.Should().Be(1200);
@@ -83,7 +84,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_NoMatch_ReturnsEmpty()
     {
-        var result = await _service.GetPropertiesAsync(plz: "00000");
+        var result = await _service.GetPropertiesAsync(plz: "00000", cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().BeEmpty();
     }
@@ -91,7 +92,7 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetPropertiesAsync_LimitIsRespected()
     {
-        var result = await _service.GetPropertiesAsync(limit: 2);
+        var result = await _service.GetPropertiesAsync(limit: 2, cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().HaveCount(2);
     }

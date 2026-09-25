@@ -29,7 +29,8 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
         string? plz = null,
         double? minFlaeche = null,
         double? maxFlaeche = null,
-        int limit = 500)
+        int limit = 500,
+        CancellationToken cancellationToken = default)
     {
         var query = VisibleProperties;
 
@@ -45,7 +46,7 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
         return await query
             .OrderBy(p => p.Str).ThenBy(p => p.Hnr)
             .Take(limit)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<List<string>> GetDistinctGemeindenAsync() =>

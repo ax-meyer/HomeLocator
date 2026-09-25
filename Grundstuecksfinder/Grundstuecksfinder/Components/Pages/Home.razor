@@ -1,5 +1,6 @@
 @page "/"
 @inject PropertyService PropertyService
+@inject SearchThrottle SearchThrottle
 @inject FilterOptionsService FilterOptionsService
 @inject GeocodingService GeocodingService
 @inject AppMetrics AppMetrics
@@ -58,6 +59,11 @@ else
     </div>
 </div>
 
+@if (_searchError is not null)
+{
+    <div class="alert alert-warning">@_searchError</div>
+}
+
 @if (_searched)
 {
     @if (_properties.Count == 0)
@@ -97,7 +103,7 @@ else if (_searchRequested)
 {
     <p class="text-muted">Bitte wähle zuerst eine PLZ oder Gemeinde.</p>
 }
-else
+else if (_searchError is null)
 {
     <p class="text-muted">Wähle eine PLZ oder Gemeinde und klicke auf <strong>Suchen</strong>.</p>
 }
@@ -111,6 +117,7 @@ else
     private List<Property> _properties = [];
     private bool _searched;
     private bool _loading;
+    private string? _searchError;
     // Suchen was clicked without a PLZ/Gemeinde; search as soon as one is chosen.
     private bool _searchRequested;
     // A filter changed while a search was running.
@@ -181,11 +188,18 @@ else
                 }
 
                 _searchRequested = false;
+                _searchError = null;
                 _coords.Clear();
                 AppMetrics.RecordSearch();
-                _properties = await PropertyService.GetPropertiesAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
+                _properties = await SearchThrottle.SearchAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
                 _searched = true;
             } while (_rerunSearch);
+        }
+        catch (SearchRejectedException ex)
+        {
+            _searchError = ex.Message;
+            _searched = false;
+            _properties = [];
         }
         finally
         {
