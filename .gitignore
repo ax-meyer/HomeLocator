@@ -58,3 +58,6 @@ Grundstuecksfinder/Grundstuecksfinder.sln.DotSettings.user
 
 # Local secrets for docker compose
 .env
+
+# Claude Code session data (worktrees, local settings)
+.claude/
