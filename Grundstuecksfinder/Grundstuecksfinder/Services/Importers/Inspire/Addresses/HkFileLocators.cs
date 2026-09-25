@@ -78,7 +78,8 @@ public sealed class HessenDownloadCenterLocator(InspireServiceClient client, str
     /// The newest ZIP file of a listing: <c>searchresult.downloads[]</c> entries shaped like
     /// <c>{ "name": "Hauskoordinaten ohne Postalische Angaben-2026-01", "fileExtension": "ZIP",
     /// "creationDate": "24.06.2026", "downloadLink": { "uri": "/downloadcenter/20260924/…zip" } }</c>,
-    /// the link relative to the listing's host and not escaped (it contains spaces).
+    /// the link relative to the listing's host and not escaped (it contains spaces). A link to
+    /// any other host is refused.
     /// </summary>
     public static HkFileLocation ParseListing(JsonDocument listing, Uri listingUrl)
     {
@@ -105,7 +106,12 @@ public sealed class HessenDownloadCenterLocator(InspireServiceClient client, str
             throw new InspireImportException($"the download center lists no ZIP file at {listingUrl}");
 
         var newest = files.OrderByDescending(f => f.Created).ThenByDescending(f => f.Name, StringComparer.Ordinal).First();
-        return new HkFileLocation(new Uri(listingUrl, EscapePath(newest.Uri)).AbsoluteUri, $"{newest.Name}|{newest.CreationDate}");
+        var url = new Uri(listingUrl, EscapePath(newest.Uri));
+        // The link is meant to be relative to the listing's host; one naming another host
+        // ("//elsewhere/…") is refused rather than downloaded from there.
+        if (Uri.Compare(url, listingUrl, UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) != 0)
+            throw new InspireImportException($"the download center links {newest.Name} to {url}, not to its own host {listingUrl.Host}");
+        return new HkFileLocation(url.AbsoluteUri, $"{newest.Name}|{newest.CreationDate}");
     }
 
     /// <summary>Escapes each path segment; unescaping first keeps an already escaped link intact.</summary>

@@ -143,6 +143,15 @@ public sealed class HkFileLocatorTests
     }
 
     [Fact]
+    public void DownloadCenter_LinkToAnotherHost_IsRefused()
+    {
+        // Protocol-relative: resolved against the listing, it would point at another server.
+        var act = () => Parse(Listing(("Edition", "24.06.2026", "ZIP", "//elsewhere.example/downloadcenter/Hauskoordinaten.zip")));
+
+        act.Should().Throw<InspireImportException>().WithMessage("*not to its own host gds.example*");
+    }
+
+    [Fact]
     public void DownloadCenter_NoZipListed_IsNothingToImport()
     {
         var act = () => Parse(Listing(("Beschreibung", "30.06.2026", "PDF", "/downloadcenter/20260924/x/Beschreibung.pdf")));
