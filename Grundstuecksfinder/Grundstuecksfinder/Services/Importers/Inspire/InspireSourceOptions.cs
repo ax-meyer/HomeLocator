@@ -1,17 +1,18 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Grundstuecksfinder.Services.Importers.Scheduling;
 
 namespace Grundstuecksfinder.Services.Importers.Inspire;
 
 /// <summary>
-/// Config for one INSPIRE-split Bundesland: a parcel WFS (area+geometry) and an address WFS
+/// Config for one INSPIRE-split Bundesland: a parcel WFS (area+geometry) and an address source
 /// (text+geometry), joined spatially since neither dataset carries both. Adding a state is
 /// adding an entry to "Import:Inspire:Sources" — no new code.
 /// </summary>
 public partial class InspireSourceOptions
 {
-    /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Source"/>.</summary>
+    /// <summary>Stable slug for this source, e.g. "sh". Becomes <see cref="InspirePropertyImporter.Id"/>.</summary>
     public string Source { get; set; } = string.Empty;
 
     /// <summary>
@@ -31,15 +32,16 @@ public partial class InspireSourceOptions
     public string ParcelWfsUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Base URL of the address source: the ad:Address WFS (INSPIRE download service), or — with
-    /// <see cref="UseOgcApiAddresses"/> — an OGC API Features collection's "items" endpoint.
+    /// Where the addresses (text + point) come from. The parcel side is always the INSPIRE
+    /// WFS above; the address side is whichever of the state's datasets is usable and fastest.
     /// </summary>
-    public string AddressWfsUrl { get; set; } = string.Empty;
+    public AddressSourceOptions AddressSource { get; set; } = new();
 
     /// <summary>
-    /// The CRS both services are asked for (srsName) and must answer in, e.g.
-    /// "urn:ogc:def:crs:EPSG::25832". Must be an ETRS89/UTM zone (EPSG 25831–25833): tiling
-    /// assumes metres with easting first. A response in any other CRS fails the import.
+    /// The CRS the WFS services are asked for (srsName) and must answer in, and that the
+    /// addresses from any other source must be in, e.g. "urn:ogc:def:crs:EPSG::25832". Must be
+    /// an ETRS89/UTM zone (EPSG 25831–25833): tiling assumes metres with easting first. Data in
+    /// any other CRS fails the import.
     /// </summary>
     public string Crs { get; set; } = string.Empty;
 
@@ -55,34 +57,11 @@ public partial class InspireSourceOptions
     public double MinTileSizeMeters { get; set; } = 50;
 
     /// <summary>
-    /// Max features requested per GetFeature call. The importer never pages via startIndex (some
-    /// servers ignore it); a tile returning this many features is split into four instead. Capped
-    /// further by the server's advertised CountDefault.
+    /// Max features requested per WFS GetFeature call. Parcels are never paged via startIndex
+    /// (some servers ignore it); a tile returning this many features is split into four instead.
+    /// Capped further by the server's advertised CountDefault.
     /// </summary>
     public int PageSize { get; set; } = 5000;
-
-    /// <summary>
-    /// For Hamburg: fetch the addresses once, paging with startIndex, instead of per tile. Its
-    /// address geometries carry SRID 0, so every bbox filter fails server-side ("Operation on
-    /// mixed SRID geometries"). Only for services whose paging is known to be stable — pages
-    /// must not shift between requests, or addresses are silently lost.
-    /// </summary>
-    public bool PageAddressesWithStartIndex { get; set; }
-
-    /// <summary>
-    /// For Saarland: fetch the addresses once from an OGC API Features "items" endpoint carrying
-    /// the ALKIS-native Hauskoordinaten schema (GeoJSON, paged with limit/offset — see
-    /// <see cref="OgcApiAddressParser"/>) instead of its hopelessly slow INSPIRE ad:Address WFS.
-    /// Mutually exclusive with <see cref="PageAddressesWithStartIndex"/>.
-    /// </summary>
-    public bool UseOgcApiAddresses { get; set; }
-
-    /// <summary>
-    /// With <see cref="UseOgcApiAddresses"/>: features requested per page. The server may only
-    /// accept specific values (Saarland: 1, 5, 10, 20, 50, 100, 200, 500, 1000, 2500) — check
-    /// live before changing this.
-    /// </summary>
-    public int OgcApiAddressPageSize { get; set; } = 2500;
 
     /// <summary>
     /// For Hamburg/Berlin: the Land itself is the Gemeinde, and the ad:level hierarchy maps
@@ -98,7 +77,7 @@ public partial class InspireSourceOptions
     public bool UsePostNameAsOrt { get; set; } = true;
 
     /// <summary>
-    /// For sources that publish (almost) no PLZ (BB, HE): an address without one gets the PLZ of
+    /// For sources that publish (almost) no PLZ (BB, NI, BW, HE): an address without one gets the PLZ of
     /// the postcode area containing it (see "Import:PostcodeAreas"). Addresses that do carry a
     /// PLZ keep it; they're only compared with the areas, as a logged plausibility check.
     /// </summary>
@@ -174,8 +153,9 @@ public partial class InspireSourceOptions
     public double CircuitBreakSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Minimum share of the address service's reported total that must have been fetched, or
-    /// the import fails and the previous data stays.
+    /// Minimum share of the address source's own total (see
+    /// <see cref="Addresses.ITileAddresses.ExpectedCount"/>) that must have been joined, or the
+    /// import fails and the previous data stays.
     /// </summary>
     public double MinCompleteness { get; set; } = 0.95;
 
@@ -222,51 +202,73 @@ public partial class InspireSourceOptions
 
             if (!IsHttpUrl(s.ParcelWfsUrl))
                 errors.Add($"{name}: ParcelWfsUrl must be an absolute http(s) URL.");
-            if (!IsHttpUrl(s.AddressWfsUrl))
-                errors.Add($"{name}: AddressWfsUrl must be an absolute http(s) URL.");
+            errors.AddRange(s.AddressSource.Validate().Select(e => $"{name}: AddressSource.{e}"));
             if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
                 errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
 
+            // Every bound below is written as "value within [min, max]", which NaN never is:
+            // a plain "< 0" check lets NaN through, and infinity or a huge number of seconds
+            // would only fail at the first request, where TimeSpan.FromSeconds overflows.
             var b = s.BoundingBox;
-            if (!(b.MinX < b.MaxX && b.MinY < b.MaxY))
-                errors.Add($"{name}: BoundingBox must have MinX < MaxX and MinY < MaxY.");
-            if (!(s.MinTileSizeMeters > 0 && s.TileSizeMeters >= s.MinTileSizeMeters))
-                errors.Add($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters.");
-            if (s.PageSize < 1)
-                errors.Add($"{name}: PageSize must be positive.");
-            if (s.PageAddressesWithStartIndex && s.UseOgcApiAddresses)
-                errors.Add($"{name}: PageAddressesWithStartIndex and UseOgcApiAddresses are mutually exclusive paging strategies.");
-            if (s.UseOgcApiAddresses && s.OgcApiAddressPageSize < 1)
-                errors.Add($"{name}: OgcApiAddressPageSize must be positive.");
-            if (s.MaxAttempts < 1)
-                errors.Add($"{name}: MaxAttempts must be at least 1.");
-            if (s.MaxFailedTiles < 0)
-                errors.Add($"{name}: MaxFailedTiles must not be negative.");
-            if (!(s.RequestTimeoutSeconds > 0))
-                errors.Add($"{name}: RequestTimeoutSeconds must be positive.");
-            if (s.MinRequestIntervalSeconds < 0)
-                errors.Add($"{name}: MinRequestIntervalSeconds must not be negative.");
-            if (s.RetryBaseDelaySeconds < 0 || s.MaxRetryDelaySeconds < s.RetryBaseDelaySeconds)
-                errors.Add($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds.");
-            if (s.CircuitFailureRatio is <= 0 or > 1)
+            if (!(double.IsFinite(b.MinX) && double.IsFinite(b.MinY) && double.IsFinite(b.MaxX) && double.IsFinite(b.MaxY)
+                  && b.MinX < b.MaxX && b.MinY < b.MaxY))
+                errors.Add($"{name}: BoundingBox must have finite MinX < MaxX and MinY < MaxY.");
+            if (!(Within(s.MinTileSizeMeters, double.Epsilon, MaxTileSizeMeters) && Within(s.TileSizeMeters, s.MinTileSizeMeters, MaxTileSizeMeters)))
+                errors.Add(Invariant($"{name}: need 0 < MinTileSizeMeters <= TileSizeMeters <= {MaxTileSizeMeters}."));
+            if (s.PageSize is < 1 or > MaxPageSize)
+                errors.Add(Invariant($"{name}: PageSize must be between 1 and {MaxPageSize}."));
+            if (s.MaxAttempts is < 1 or > MaxMaxAttempts)
+                errors.Add(Invariant($"{name}: MaxAttempts must be between 1 and {MaxMaxAttempts}."));
+            if (s.MaxFailedTiles is < 0 or > MaxMaxFailedTiles)
+                errors.Add(Invariant($"{name}: MaxFailedTiles must be between 0 and {MaxMaxFailedTiles}."));
+            if (!Within(s.RequestTimeoutSeconds, double.Epsilon, MaxSeconds))
+                errors.Add(Invariant($"{name}: RequestTimeoutSeconds must be greater than 0 and at most {MaxSeconds}."));
+            if (!Within(s.MinRequestIntervalSeconds, 0, MaxSeconds))
+                errors.Add(Invariant($"{name}: MinRequestIntervalSeconds must be between 0 and {MaxSeconds}."));
+            if (!(Within(s.RetryBaseDelaySeconds, 0, MaxSeconds) && Within(s.MaxRetryDelaySeconds, s.RetryBaseDelaySeconds, MaxSeconds)))
+                errors.Add(Invariant($"{name}: need 0 <= RetryBaseDelaySeconds <= MaxRetryDelaySeconds <= {MaxSeconds}."));
+            if (!Within(s.CircuitFailureRatio, double.Epsilon, 1))
                 errors.Add($"{name}: CircuitFailureRatio must be greater than 0 and at most 1.");
             if (s.CircuitMinimumThroughput < 2)
                 errors.Add($"{name}: CircuitMinimumThroughput must be at least 2.");
-            if (s.CircuitSamplingSeconds < 0.5)
-                errors.Add($"{name}: CircuitSamplingSeconds must be at least 0.5.");
-            if (!(s.CircuitBreakSeconds > 0))
-                errors.Add($"{name}: CircuitBreakSeconds must be positive.");
-            if (s.MinCompleteness is < 0 or > 1)
+            if (!Within(s.CircuitSamplingSeconds, 0.5, MaxSeconds))
+                errors.Add(Invariant($"{name}: CircuitSamplingSeconds must be between 0.5 and {MaxSeconds}."));
+            if (!Within(s.CircuitBreakSeconds, 0.5, MaxSeconds))
+                errors.Add(Invariant($"{name}: CircuitBreakSeconds must be between 0.5 and {MaxSeconds}."));
+            if (!Within(s.MinCompleteness, 0, 1))
                 errors.Add($"{name}: MinCompleteness must be between 0 and 1.");
-            if (s.MaxUnmatchedRatio is < 0 or > 1)
+            if (!Within(s.MaxUnmatchedRatio, 0, 1))
                 errors.Add($"{name}: MaxUnmatchedRatio must be between 0 and 1.");
-            if (s.MinPostcodeFillRatio is < 0 or > 1)
+            if (!Within(s.MinPostcodeFillRatio, 0, 1))
                 errors.Add($"{name}: MinPostcodeFillRatio must be between 0 and 1.");
         }
         return errors;
     }
 
-    private static bool IsHttpUrl(string url) =>
+    /// <summary>
+    /// Longest wait or limit any of the seconds options may be set to: a day. Far beyond any
+    /// sensible value, and Polly's own ceiling for retry delays and circuit-breaker durations.
+    /// </summary>
+    public const double MaxSeconds = 86_400;
+
+    /// <summary>Largest tile edge: 1000 km, bigger than any state.</summary>
+    public const double MaxTileSizeMeters = 1_000_000;
+
+    /// <summary>Largest WFS page; servers cap theirs far lower anyway (see CountDefault).</summary>
+    public const int MaxPageSize = 100_000;
+
+    /// <summary>Most attempts per request; the default of 10 already rides out about an hour.</summary>
+    public const int MaxMaxAttempts = 100;
+
+    /// <summary>Most tiles that may be skipped; every one costs a full retry budget.</summary>
+    public const int MaxMaxFailedTiles = 10_000;
+
+    /// <summary>Whether <paramref name="value"/> lies in [min, max]; false for NaN.</summary>
+    private static bool Within(double value, double min, double max) => value >= min && value <= max;
+
+    private static string Invariant(FormattableString text) => FormattableString.Invariant(text);
+
+    internal static bool IsHttpUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
 
     [GeneratedRegex(@"epsg(?:::|:|/0/|/)(\d+)$", RegexOptions.IgnoreCase)]

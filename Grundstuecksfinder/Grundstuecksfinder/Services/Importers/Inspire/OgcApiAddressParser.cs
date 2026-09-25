@@ -6,7 +6,7 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 /// <summary>
 /// Parses the ALKIS-native "Hauskoordinaten" schema an OGC API Features "items" endpoint answers
 /// with (GeoJSON), for sources whose INSPIRE ad:Address WFS is too slow to use (see
-/// <see cref="InspireSourceOptions.UseOgcApiAddresses"/>). Not an INSPIRE schema, so its field
+/// <see cref="Addresses.OgcApiFeaturesAddressProvider"/>). Not an INSPIRE schema, so its field
 /// names are specific to this one dataset (Saarland's, so far): STN street, HNR/ADZ house number
 /// and its suffix, PLZ, ONM the place name — there is no separate Ortsteil level, so ONM becomes
 /// both Ort and Gemeinde.

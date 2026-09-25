@@ -10,7 +10,7 @@ public partial class WfsLiveEndpointTests
     // ── Saarland ─────────────────────────────────────────────────────────────
     // The parcel side stays on the INSPIRE cp:CadastralParcel WFS; the address side moves to the
     // native ALKIS Hauskoordinaten OGC API Features endpoint, whose ad:Address WFS equivalent is
-    // ~170x slower for the same data (see InspireSourceOptions.UseOgcApiAddresses).
+    // ~170x slower for the same data (see AddressSourceType.OgcApiFeatures).
 
     private const string HauskoordinatenUrl =
         "https://geoportal.saarland.de/spatial-objects/416/collections/GDI_ALKIS_Gebaeude:Hauskoordinaten/items";

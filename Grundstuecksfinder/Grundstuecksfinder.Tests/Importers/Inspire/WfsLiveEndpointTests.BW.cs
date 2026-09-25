@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -7,6 +8,10 @@ namespace Grundstuecksfinder.Tests.Importers.Inspire;
 public partial class WfsLiveEndpointTests
 {
     // ── Baden-Württemberg ────────────────────────────────────────────────────
+    // Parcels from the INSPIRE WFS; addresses from LGL's statewide Hauskoordinaten file (see
+    // AddressSourceType.HkFile), which replaced hours of address WFS tiles.
+
+    private const string BwHauskoordinatenUrl = "https://opengeodata.lgl-bw.de/data/hk/hk_bw.zip";
 
     [Fact]
     public async Task BW_Parcels_ParseSuccessfully()
@@ -23,18 +28,18 @@ public partial class WfsLiveEndpointTests
         parcels.Should().OnlyContain(p => p.Geometry.IsValid);
     }
 
+    /// <summary>
+    /// The import only downloads the 73 MB file when its version changed, and the version is
+    /// what a HEAD request says. Should LGL stop sending ETag and Last-Modified, BW would never
+    /// be imported again — this fails first.
+    /// </summary>
     [Fact]
-    public async Task BW_Addresses_ParseSuccessfully()
+    public async Task BW_HauskoordinatenFile_IsVersionedByItsHeaders()
     {
-        using var stream = await FetchGetFeature(
-            "https://owsproxy.lgl-bw.de/owsproxy/wfs/WFS_INSP_BW_Adr_Hauskoord_ALKIS",
-            "ad:Address",
-            "470000,5350000,475000,5355000",
-            "urn:ogc:def:crs:EPSG::25832",
-            resolve: true);
+        var location = await new StaticUrlHkFileLocator(LiveClient(), BwHauskoordinatenUrl)
+            .LocateAsync(TestContext.Current.CancellationToken);
 
-        var addresses = WfsGmlParser.ParseAddresses(stream).Features.ToList();
-        addresses.Should().NotBeEmpty("BW should have addresses in this tile near Freiburg");
-        addresses.Should().OnlyContain(a => a.Location != null);
+        location.Url.Should().Be(BwHauskoordinatenUrl);
+        location.Version.Should().MatchRegex("^\".+\"\\|\\d{4}-\\d{2}-\\d{2}T", "both an ETag and a Last-Modified are expected");
     }
 }

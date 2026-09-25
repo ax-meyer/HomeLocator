@@ -102,7 +102,8 @@ foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
         postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>(),
         nameCatalogLoader: sp.GetRequiredService<NameCatalogLoader>(),
         loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
-        refreshPolicy: refreshOptions.PolicyFor(inspireSource.Refresh)));
+        refreshPolicy: refreshOptions.PolicyFor(inspireSource.Refresh),
+        workDirectory: importWorkDirectory));
 }
 
 var minRetainedRatio = builder.Configuration.GetValue("Import:MinRetainedRatio", PropertyBulkWriter.DefaultMinRetainedRatio);
