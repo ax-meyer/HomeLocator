@@ -4,8 +4,8 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Grundstuecksfinder.Services;
 
-/// <summary>The PLZ and Gemeinde choices for the search filters.</summary>
-public sealed record FilterOptions(IReadOnlyList<string> Plz, IReadOnlyList<string> Gemeinden);
+/// <summary>The PLZ and Gemeinde choices for the search's location filter.</summary>
+public sealed record FilterOptions(IReadOnlyList<SearchLocation> Locations);
 
 /// <summary>
 /// Serves the filter dropdowns from memory. Building them takes a DISTINCT over every property
@@ -31,9 +31,9 @@ public class FilterOptionsService(PropertyService properties, AppDbContext conte
         return (await cache.GetOrCreateAsync($"filter-options:{dataVersion}", async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = MaxAge;
-            return new FilterOptions(
+            return new FilterOptions(SearchLocation.Combine(
                 await properties.GetDistinctPlzAsync(),
-                await properties.GetDistinctGemeindenAsync());
+                await properties.GetDistinctGemeindenAsync()));
         }))!;
     }
 }

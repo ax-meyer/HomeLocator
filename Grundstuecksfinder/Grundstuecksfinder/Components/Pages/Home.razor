@@ -34,27 +34,22 @@ else
 }
 
 <div class="row g-3 mb-4 align-items-end">
-    <div class="col-sm-6 col-md-3">
-        <RadzenLabel Text="PLZ" />
-        <RadzenDropDown @bind-Value="_plz" @bind-Value:after="OnLocationChanged" Data="@_plzOptions"
+    <div class="col-sm-12 col-md-6">
+        <RadzenLabel Text="PLZ oder Gemeinde" />
+        <RadzenDropDown @bind-Value="_location" @bind-Value:after="OnLocationChanged" Data="@_locationOptions"
+                        TextProperty="@nameof(SearchLocation.Name)"
                         AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
+                        ClearSearchAfterSelection="true" ResetSelectedIndexOnFilter="true"
                         FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
-                        Placeholder="PLZ wählen …" class="w-100" />
-    </div>
-    <div class="col-sm-6 col-md-3">
-        <RadzenLabel Text="Gemeinde" />
-        <RadzenDropDown @bind-Value="_gemeinde" @bind-Value:after="OnLocationChanged" Data="@_gemeindeOptions"
-                        AllowFiltering="true" AllowClear="true" AllowVirtualization="true"
-                        FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
-                        Placeholder="Gemeinde wählen …" class="w-100" />
+                        Placeholder="PLZ oder Gemeinde wählen …" class="w-100" />
     </div>
     <div class="col-sm-6 col-md-2">
         <RadzenLabel Text="Fläche min (m²)" />
-        <RadzenNumeric @bind-Value="_minFlaeche" class="w-100" TValue="double?" />
+        <RadzenNumeric @bind-Value="_minFlaeche" @bind-Value:after="OnMinFlaecheChanged" class="w-100" TValue="double?" />
     </div>
     <div class="col-sm-6 col-md-2">
         <RadzenLabel Text="Fläche max (m²)" />
-        <RadzenNumeric @bind-Value="_maxFlaeche" class="w-100" TValue="double?" />
+        <RadzenNumeric @bind-Value="_maxFlaeche" @bind-Value:after="OnMaxFlaecheChanged" class="w-100" TValue="double?" />
     </div>
     <div class="col-sm-12 col-md-2">
         <RadzenButton Text="Suchen" Click="Search"
@@ -110,8 +105,7 @@ else
 @code {
     private const int MaxResults = 500;
 
-    private string? _plz;
-    private string? _gemeinde;
+    private SearchLocation? _location;
     private double? _minFlaeche;
     private double? _maxFlaeche;
     private List<Property> _properties = [];
@@ -125,8 +119,7 @@ else
     private long _totalCount;
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
 
-    private IReadOnlyList<string> _plzOptions = [];
-    private IReadOnlyList<string> _gemeindeOptions = [];
+    private IReadOnlyList<SearchLocation> _locationOptions = [];
 
     // propertyId → (lat, lon)
     private readonly Dictionary<int, (double Lat, double Lon)> _coords = [];
@@ -135,9 +128,7 @@ else
     {
         _lastCheckedAt = await PropertyService.GetLastCheckedAtAsync();
         _totalCount = await PropertyService.GetTotalPropertyCountAsync();
-        var filterOptions = await FilterOptionsService.GetAsync();
-        _plzOptions = filterOptions.Plz;
-        _gemeindeOptions = filterOptions.Gemeinden;
+        _locationOptions = (await FilterOptionsService.GetAsync()).Locations;
     }
 
     protected override Task OnAfterRenderAsync(bool firstRender)
@@ -162,6 +153,11 @@ else
     private Task OnLocationChanged() =>
         _searched || _searchRequested ? RunSearch() : Task.CompletedTask;
 
+    // RadzenNumeric commits its value when the field loses focus. A bound left open takes the
+    // other's value then, so typing one size searches for exactly that size until the other is changed.
+    private void OnMinFlaecheChanged() => _maxFlaeche ??= _minFlaeche;
+    private void OnMaxFlaecheChanged() => _minFlaeche ??= _maxFlaeche;
+
     private async Task RunSearch()
     {
         if (_loading)
@@ -176,7 +172,7 @@ else
             do
             {
                 _rerunSearch = false;
-                if (string.IsNullOrEmpty(_plz) && string.IsNullOrEmpty(_gemeinde))
+                if (_location is null)
                 {
                     _searchRequested = true;
                     _searched = false;
@@ -187,7 +183,7 @@ else
                 _searchRequested = false;
                 _coords.Clear();
                 AppMetrics.RecordSearch();
-                _properties = await PropertyService.GetPropertiesAsync(_gemeinde, _plz, _minFlaeche, _maxFlaeche, MaxResults);
+                _properties = await PropertyService.GetPropertiesAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
                 _searched = true;
             } while (_rerunSearch);
         }
