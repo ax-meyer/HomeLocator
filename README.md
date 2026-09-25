@@ -1,16 +1,18 @@
 # Grundstücksfinder
 
 Grundstücksfinder is a self-hosted search tool for German real-estate parcels. It imports
-official open data ("Grundsteuer") published by German states, stores it in
-Postgres, and lets you search parcels by postal code, municipality, and area (m²) through a
-Blazor Server web UI — with geocoded map markers via OpenStreetMap/Nominatim.
+the official cadastral open data (ALKIS) the German states publish, stores it in Postgres, and
+lets you search parcels by postal code, municipality, and area (m²) through a Blazor Server
+web UI — with geocoded map markers via OpenStreetMap/Nominatim.
 
-Currently ships with sources for **North Rhine-Westphalia (NRW)** and the states that publish
-parcels and addresses separately — parcels as an INSPIRE service, addresses as an INSPIRE
-service or a statewide file — joined by location (configured under `Import:Inspire:Sources`,
-see [INSPIRE states](#inspire-states)). The import pipeline is built around a pluggable `IPropertySource`
-interface, so adding another Bundesland (or country) is a matter of writing one source class —
-no changes to the shared import, scheduling, storage, or search code required.
+Currently ships with sources for **13 of the 16 Bundesländer** (~17.8 million addresses, see
+[Data sources](#data-sources)): North Rhine-Westphalia from its Grundsteuer bulk file, all
+others from their cadastral web services — parcels and addresses joined by location, or parcels
+that name their own addresses (configured under `Import:Inspire:Sources`, see
+[States from cadastral web services](#states-from-cadastral-web-services)). The import pipeline
+is built around a pluggable `IPropertySource` interface, so adding another Bundesland (or
+country) is a matter of writing one source class — no changes to the shared import, scheduling,
+storage, or search code required.
 
 ![Grundstücksfinder screenshot](grundstuecksfinder.png)
 
@@ -22,6 +24,41 @@ no changes to the shared import, scheduling, storage, or search code required.
 - Multiple data sources can coexist without one import wiping another's rows
 - Import history (`ImportRuns`) and per-source state (`SourceStates`) in the database; failed
   imports and known holes show up on `/health`
+
+## Data sources
+
+Every source is official open data that also allows commercial use; the exact credits each
+licence asks for are on the app's Impressum page. Row counts and import times are from full
+local imports in September 2026.
+
+| State | Parcels (area) | Addresses | Licence | Rows | Import |
+|---|---|---|---|---:|---:|
+| Baden-Württemberg | INSPIRE WFS | Hauskoordinaten file | dl-de/by-2.0 | 3.09 M | 2 h 30 min |
+| Berlin | ALKIS WFS | address register WFS | dl-de/zero-2.0 | 0.40 M | 30 min |
+| Brandenburg | INSPIRE WFS | INSPIRE WFS | dl-de/by-2.0 | 0.87 M | 1 h |
+| Bremen | ALKIS-vereinfacht WFS | ALKIS Gebäudeadressen WFS | CC BY 4.0 | 0.18 M | 6 min |
+| Hamburg | INSPIRE WFS | INSPIRE WFS (startIndex) | dl-de/by-2.0 | 0.30 M | 10 min |
+| Hessen | INSPIRE WFS | Hauskoordinaten file | dl-de/zero-2.0 | 1.63 M | 2 h 25 min |
+| Niedersachsen | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 2.64 M | 2 h 15 min |
+| Nordrhein-Westfalen | Grundsteuer bulk file | (same file) | dl-de/zero-2.0 | 3.95 M | 5 min |
+| Rheinland-Pfalz | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | dl-de/by-2.0 | 1.73 M | 1 h 40 min |
+| Saarland | INSPIRE WFS | Hauskoordinaten OGC API | dl-de/by-2.0, CC BY 4.0 | 0.34 M | 8 min |
+| Sachsen | INSPIRE WFS | INSPIRE WFS | dl-de/by-2.0 | 0.99 M | 50 min |
+| Schleswig-Holstein | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 0.95 M | 50 min |
+| Thüringen | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | CC BY 4.0 | 0.69 M | 3 h 45 min |
+
+Where a state publishes no PLZ (BB, BW, HE, NI, RP, TH), it is filled from the OpenStreetMap
+postcode areas ([yetzt/postleitzahlen](https://github.com/yetzt/postleitzahlen), ODbL 1.0).
+
+Not covered, for licence reasons:
+
+- **Sachsen-Anhalt** — its ALKIS "OpenData" WFS would work like Rheinland-Pfalz's, but the
+  licence statements contradict each other (dl-de/by-2.0 in the service's metadata, dl-de/by-1.0
+  and the state's fee regulation elsewhere). Waiting for LVermGeo to confirm dl-de/by-2.0.
+- **Mecklenburg-Vorpommern** — parcels are free, but the address service may not be built into
+  paid websites or apps without a licence from LAiV M-V.
+- **Bayern** — no free vector parcels or addresses at all (open data has only a raster parcel
+  map); statewide ALKIS data costs about €56,000.
 
 ## Quick setup
 
@@ -49,8 +86,8 @@ in `docker-compose.yml` if you don't use it).
    ```
 
    The app listens on port `8080` behind Traefik and connects to the bundled `postgres:17-alpine`
-   service. On first startup it imports every enabled source, one after another (this takes
-   hours for the large states); after that the import check runs nightly at 03:00 UTC.
+   service. On first startup it imports every enabled source, one after another (about 16 hours
+   for all 13 states); after that the import check runs nightly at 03:00 UTC.
 
 ### Upgrading from a version with `ImportLogs`
 
@@ -65,8 +102,8 @@ docker compose exec db createdb -U homelocator homelocator
 docker compose up -d app
 ```
 
-The first start then imports all sources back to back, which takes hours; the site shows no
-data until the first source completes.
+The first start then imports all sources back to back, which takes about 16 hours; the site
+shows no data until the first source completes.
 
 ### Local development
 
@@ -96,9 +133,10 @@ decides what to import:
 - A source with an **exact** fingerprint (the publisher's own version marker, e.g. NRW's manifest
   timestamp) is re-imported as soon as it changes, and an unchanged file is never downloaded
   again.
-- A source with an **approximate** fingerprint (INSPIRE WFS hit counts, which drift daily in
-  active states — every INSPIRE state, since its parcels always come from a WFS) is re-imported when it changed and the data is at least `MinAgeDays` old, or
-  in any case once the data is `MaxAgeDays` old.
+- A source with an **approximate** fingerprint (WFS hit counts, which drift daily in active
+  states — every state but NRW, since its parcels always come from a WFS) is re-imported when
+  it changed and the data is at least `MinAgeDays` old, or in any case once the data is
+  `MaxAgeDays` old.
 - Such re-imports only happen in the nightly run, at most `MaxRoutineImportsPerRun` of them,
   most overdue first, so the multi-hour states are spread over several nights; the run at
   startup only does first imports. A failed import is simply due again in the next run; the
@@ -118,12 +156,13 @@ The per-source `Refresh` section is optional and overrides the defaults for that
 Downloads (NRW's ~1 GB ZIP and similar files) go to `Import:WorkDirectory`, by default a
 `grundstuecksfinder` directory under the system temp directory, and are deleted once read.
 
-### INSPIRE states
+### States from cadastral web services
 
-These states publish no dataset carrying both an address and a parcel's official area, so each
-import joins two: parcels (official area + outline) from the state's INSPIRE `cp:CadastralParcel`
-WFS (or another parcel feature type, see below), fetched tile by tile, and addresses from whichever of the state's address datasets is usable
-and fastest, each address matched to the parcel containing it. `AddressSource.Type` picks it:
+These states publish no single file carrying both an address and a parcel's official area.
+Mostly each import joins two datasets: parcels (official area + outline) from the state's
+INSPIRE `cp:CadastralParcel` WFS (or another parcel feature type, see below), fetched tile by
+tile, and addresses from whichever of the state's address datasets is usable and fastest, each
+address matched to the parcel containing it. `AddressSource.Type` picks it:
 
 | Type | Addresses from | Used by |
 |---|---|---|
@@ -163,6 +202,29 @@ Only the qualities in `AllowedQualities` (default A and B) are imported: BW's qu
 carry house numbers made up from their coordinates. An Ortsteil that only numbers a district
 (HE's "Frankfurt Bezirk 32") is ignored in favour of the Gemeinde. Sources without a PLZ get the
 one of the OpenStreetMap postcode area around them (`FillMissingPlzFromPostcodeAreas`).
+
+A `FlatWfs` address type maps the elements of a non-INSPIRE address feature in `Fields`
+(`Street`, `HouseNumber`, `HouseNumberSuffix`, `Plz`, `Ort`, `Gemeinde`); a city state whose
+data names no Gemeinde gets `FixedGemeinde` instead, with its Ortsteil as the Ort:
+
+```json
+{
+  "Source": "be",
+  "ParcelWfsUrl": "https://gdi.berlin.de/services/wfs/alkis_flurstuecke",
+  "ParcelFeatureType": { "TypeName": "alkis_flurstuecke:flurstuecke", "AreaField": "afl" },
+  "AddressSource": {
+    "Type": "FlatWfs",
+    "Url": "https://gdi.berlin.de/services/wfs/adressen_berlin",
+    "TypeName": "adressen_berlin:adressen_berlin",
+    "Fields": {
+      "Street": "str_name", "HouseNumber": "hnr", "HouseNumberSuffix": "hnr_zusatz",
+      "Plz": "plz", "Ort": "ort_name", "FixedGemeinde": "Berlin"
+    }
+  },
+  "Crs": "urn:ogc:def:crs:EPSG::25833",
+  "BoundingBox": { "MinX": 365000, "MinY": 5795000, "MaxX": 420000, "MaxY": 5840000 }
+}
+```
 
 #### Parcels that name their own addresses
 
@@ -212,6 +274,14 @@ Integration tests spin up Postgres via Testcontainers, so Docker must be running
 
 ```bash
 dotnet test --project Grundstuecksfinder.Tests
+```
+
+Tests marked `Category=Live` query every state's real services with tiny requests, to notice
+when one changes its format; they need network access and fail when a service is down. To skip
+them:
+
+```bash
+dotnet test --project Grundstuecksfinder.Tests --filter-not-trait "Category=Live"
 ```
 
 ## License
