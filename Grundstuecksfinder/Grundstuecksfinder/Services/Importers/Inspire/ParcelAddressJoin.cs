@@ -156,7 +156,6 @@ public sealed partial class ParcelAddressJoin(
         LogFetchSummary(logger, Source, addressCount, expected, completeness, unmatchedCount, failedTiles.Count);
         if (postcodes is not null)
             LogPlzSummary(logger, Source, plzStats.Filled, plzStats.Missing, plzStats.Agreeing, plzStats.Official);
-        tileAddresses.ReportSummary();
 
         if (completeness < options.MinCompleteness)
             throw new InspireImportException(FormattableString.Invariant(

@@ -8,11 +8,9 @@ namespace Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 /// (<see cref="AddressSourceType.InspireWfs"/>): the default, and the only way that keeps
 /// memory flat whatever the state's size.
 /// </summary>
-public sealed partial class InspireWfsAddressProvider(
+public sealed class InspireWfsAddressProvider(
     WfsFeatureType wfs,
-    InspireSourceOptions options,
-    ILogger logger,
-    NameCatalogLoader? nameCatalogLoader) : IAddressProvider
+    InspireSourceOptions options) : IAddressProvider
 {
     /// <summary>The address count: approximate, like every live service's.</summary>
     public async Task<FingerprintPart> ProbeAsync(CancellationToken ct) =>
@@ -22,8 +20,7 @@ public sealed partial class InspireWfsAddressProvider(
     {
         var expected = await RequireCountAsync(wfs, options, ct);
         var pageLimit = await wfs.GetPageLimitAsync(ct);
-        var nameCatalog = await LoadNameCatalogAsync(options, nameCatalogLoader, ct);
-        return new PerTile(wfs, options, logger, expected, pageLimit, nameCatalog);
+        return new PerTile(wfs, options, expected, pageLimit);
     }
 
     /// <summary>
@@ -34,24 +31,10 @@ public sealed partial class InspireWfsAddressProvider(
         await wfs.GetHitsAsync(ct)
         ?? throw new InspireImportException($"{options.Source}: the address service no longer reports a feature count.");
 
-    /// <summary>Hessen's intact spellings, loaded before the (long) fetch; null elsewhere.</summary>
-    internal static async Task<NameCatalog?> LoadNameCatalogAsync(
-        InspireSourceOptions options, NameCatalogLoader? loader, CancellationToken ct) =>
-        options.NameCatalog.IsConfigured && loader is not null
-            ? await loader.LoadAsync(options.NameCatalog, ct)
-            : null;
+    internal static WfsPage<AddressFeature> Parse(XDocument doc, InspireSourceOptions options) =>
+        WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt);
 
-    internal static WfsPage<AddressFeature> Parse(XDocument doc, InspireSourceOptions options, NameCatalog? nameCatalog) =>
-        WfsGmlParser.ParseAddresses(doc, options.IsCityState, options.UsePostNameAsOrt, nameCatalog);
-
-    internal static void ReportNameRepairs(ILogger logger, string source, NameCatalog? nameCatalog)
-    {
-        if (nameCatalog is not null)
-            LogNameRepairs(logger, source, nameCatalog.Repaired, nameCatalog.Unrepairable);
-    }
-
-    private sealed class PerTile(
-        WfsFeatureType wfs, InspireSourceOptions options, ILogger logger, long expected, int pageLimit, NameCatalog? nameCatalog)
+    private sealed class PerTile(WfsFeatureType wfs, InspireSourceOptions options, long expected, int pageLimit)
         : ITileAddresses
     {
         public long ExpectedCount => expected;
@@ -60,13 +43,8 @@ public sealed partial class InspireWfsAddressProvider(
 
         public async Task<AddressTile> GetAsync(Tile tile, CancellationToken ct)
         {
-            var page = await wfs.GetPageAsync(tile, pageLimit, doc => Parse(doc, options, nameCatalog), ct);
+            var page = await wfs.GetPageAsync(tile, pageLimit, doc => Parse(doc, options), ct);
             return page.MemberCount >= pageLimit ? AddressTile.Full : AddressTile.Of(page.Features);
         }
-
-        public void ReportSummary() => ReportNameRepairs(logger, options.Source, nameCatalog);
     }
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Source}: repaired {Repaired} damaged names from the catalogue; {Unrepairable} kept as published")]
-    private static partial void LogNameRepairs(ILogger logger, string source, int repaired, int unrepairable);
 }

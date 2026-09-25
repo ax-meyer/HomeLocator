@@ -35,27 +35,10 @@ public class PlaceNameNormalizerTests
         PlaceNameNormalizer.NormalizePlace(input).Should().Be(expected);
 
     [Theory]
-    [InlineData("Adam-Riese-Stra\uFFFDe", "Adam-Riese-Straße")]
-    [InlineData("Buchbornstra\uFFFDe", "Buchbornstraße")]
-    [InlineData("Stra\uFFFDe des 17. Juni", "Straße des 17. Juni")]
-    [InlineData("Am M\uFFFDhlgraben", "Am M\uFFFDhlgraben")]
     [InlineData("Hauptstraße", "Hauptstraße")]
+    [InlineData("  Am Markt ", "Am Markt")]
     [InlineData(" ", null)]
-    public void RepairStreet(string? input, string? expected) =>
-        PlaceNameNormalizer.RepairStreet(input).Should().Be(expected);
-
-    [Theory]
-    [InlineData("Am M\uFFFDhlgraben", "Am Mühlgraben")]
-    [InlineData("Gie\uFFFDener Stra\uFFFDe", "Gießener Straße")]
-    [InlineData("\uFFFDlm\uFFFDhle", "Ölmühle")]
-    public void CandidateSpellings_ContainsOriginal(string corrupted, string original) =>
-        PlaceNameNormalizer.CandidateSpellings(corrupted).Should().Contain(original);
-
-    [Fact]
-    public void CandidateSpellings_RanksMostLikelyFirst()
-    {
-        PlaceNameNormalizer.CandidateSpellings("Am M\uFFFDhlgraben").First().Should().Be("Am Mühlgraben");
-        PlaceNameNormalizer.CandidateSpellings("Gie\uFFFDen").First().Should().Be("Gießen");
-        PlaceNameNormalizer.CandidateSpellings("\uFFFDlweg").Should().Equal("Älweg", "Ölweg", "Ülweg");
-    }
+    [InlineData(null, null)]
+    public void NormalizeStreet(string? input, string? expected) =>
+        PlaceNameNormalizer.NormalizeStreet(input).Should().Be(expected);
 }

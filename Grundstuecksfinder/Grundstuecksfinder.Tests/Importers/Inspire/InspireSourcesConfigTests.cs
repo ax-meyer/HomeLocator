@@ -29,7 +29,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("bw", AddressSourceType.HkFile)]
     [InlineData("ni", AddressSourceType.InspireWfs)]
     [InlineData("hh", AddressSourceType.InspireWfsStartIndex)]
-    [InlineData("he", AddressSourceType.InspireWfs)]
+    [InlineData("he", AddressSourceType.HkFile)]
     [InlineData("sl", AddressSourceType.OgcApiFeatures)]
     public void ShippedSources_UseTheirAddressSource(string source, AddressSourceType type) =>
         ShippedSources().Single(s => s.Source == source).AddressSource.Type.Should().Be(type);
@@ -43,6 +43,17 @@ public sealed class InspireSourcesConfigTests
         bw.AddressSource.Member.Should().Be("adressen-bw.txt");
         bw.AddressSource.Qualities.Should().Equal("A", "B");
         bw.FillMissingPlzFromPostcodeAreas.Should().BeTrue("the file's postal columns are empty");
+    }
+
+    [Fact]
+    public void ShippedSources_HessenFindsItsHauskoordinatenFileInTheDownloadCenter()
+    {
+        var he = ShippedSources().Single(s => s.Source == "he");
+
+        he.AddressSource.Locator.Should().Be(HkFileLocatorType.HessenDownloadCenter);
+        he.AddressSource.Member.Should().Be("Hauskoordinaten*.txt", "the member's name carries the edition");
+        he.AddressSource.Qualities.Should().Equal("A", "B");
+        he.FillMissingPlzFromPostcodeAreas.Should().BeTrue("the file has no postal columns at all");
     }
 
     [Fact]

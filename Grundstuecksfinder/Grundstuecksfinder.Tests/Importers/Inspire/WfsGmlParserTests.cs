@@ -136,7 +136,7 @@ public class WfsGmlParserTests
     }
 
     [Fact]
-    public void ParseAddresses_HessenStyle_ResolvesGemeindeAndRepairsCorruptedStrasse()
+    public void ParseAddresses_HessenStyle_ResolvesGemeindeFromTheLevels()
     {
         using var stream = OpenFixture("addresses_levels.gml");
 

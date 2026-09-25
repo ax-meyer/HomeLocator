@@ -11,8 +11,7 @@ namespace Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 public sealed partial class InspireWfsStartIndexAddressProvider(
     WfsFeatureType wfs,
     InspireSourceOptions options,
-    ILogger logger,
-    NameCatalogLoader? nameCatalogLoader) : IAddressProvider
+    ILogger logger) : IAddressProvider
 {
     public async Task<FingerprintPart> ProbeAsync(CancellationToken ct) =>
         FingerprintPart.FromCount(await wfs.GetHitsAsync(ct), "address");
@@ -21,15 +20,13 @@ public sealed partial class InspireWfsStartIndexAddressProvider(
     {
         var expected = await InspireWfsAddressProvider.RequireCountAsync(wfs, options, ct);
         var pageSize = await wfs.GetPageLimitAsync(ct);
-        var nameCatalog = await InspireWfsAddressProvider.LoadNameCatalogAsync(options, nameCatalogLoader, ct);
 
         var all = new PreloadedAddresses.Builder();
         // A server that silently ignores startIndex would hand out its first page forever.
         var limit = expected + pageSize;
         for (var startIndex = 0L; ; startIndex += pageSize)
         {
-            var page = await wfs.GetPageAsync(startIndex, pageSize,
-                doc => InspireWfsAddressProvider.Parse(doc, options, nameCatalog), ct);
+            var page = await wfs.GetPageAsync(startIndex, pageSize, doc => InspireWfsAddressProvider.Parse(doc, options), ct);
             foreach (var address in page.Features)
                 all.Add(address);
 
@@ -40,7 +37,6 @@ public sealed partial class InspireWfsStartIndexAddressProvider(
         }
 
         LogPagedAddresses(logger, options.Source, all.Count, expected);
-        InspireWfsAddressProvider.ReportNameRepairs(logger, options.Source, nameCatalog);
         return all.Build(expected);
     }
 

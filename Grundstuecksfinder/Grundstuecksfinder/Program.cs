@@ -91,8 +91,6 @@ builder.Services.AddDownloadClient(NrwPropertyImporter.HttpClientName);
 builder.Services.AddSingleton(builder.Configuration.GetSection("Import:PostcodeAreas").Get<PostcodeAreaOptions>() ?? new PostcodeAreaOptions());
 builder.Services.AddDownloadClient(PostcodeAreaProvider.HttpClientName);
 builder.Services.AddSingleton<IPostcodeAreaProvider, PostcodeAreaProvider>();
-// Intact name spellings for sources whose own export lost them (Hessen); uses the Inspire client.
-builder.Services.AddSingleton<NameCatalogLoader>();
 foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
 {
     builder.Services.AddScoped<IPropertySource>(sp => new InspirePropertyImporter(
@@ -100,7 +98,6 @@ foreach (var inspireSource in inspireSources.Where(s => s.Enabled))
         sp.GetRequiredService<IHttpClientFactory>(),
         inspireSource,
         postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>(),
-        nameCatalogLoader: sp.GetRequiredService<NameCatalogLoader>(),
         loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
         refreshPolicy: refreshOptions.PolicyFor(inspireSource.Refresh),
         workDirectory: importWorkDirectory));

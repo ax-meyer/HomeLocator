@@ -127,10 +127,10 @@ and fastest, each address matched to the parcel containing it. `AddressSource.Ty
 
 | Type | Addresses from | Used by |
 |---|---|---|
-| `InspireWfs` | the INSPIRE `ad:Address` WFS, per tile alongside the parcels | SH, SN, BB, NI, HE |
+| `InspireWfs` | the INSPIRE `ad:Address` WFS, per tile alongside the parcels | SH, SN, BB, NI |
 | `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
 | `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
-| `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW |
+| `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW, HE |
 
 ```json
 {
@@ -151,14 +151,16 @@ and fastest, each address matched to the parcel containing it. `AddressSource.Ty
 
 A Hauskoordinaten file is found by its `Locator` — `StaticUrl` (a fixed URL, versioned by its
 ETag/Last-Modified) or `HessenDownloadCenter` (the REST listing of a folder in Hessen's download
-center) — so the address part of the fingerprint is the publisher's own version. The parcel part
-is still a WFS hit count, though, so the state as a whole stays **approximate**: its file is
-downloaded again whenever the state is re-imported under its `MinAgeDays`/`MaxAgeDays`, even if
-the file itself hasn't changed. It goes to `Import:WorkDirectory` like every download, is read
-from the ZIP entry named by `Member` (a name, or a pattern with `*`/`?`), and deleted right after.
+center, whose download links only work on the day they are listed) — so the address part of the
+fingerprint is the publisher's own version. The parcel part is still a WFS hit count, though, so
+the state as a whole stays **approximate**: its file is downloaded again whenever the state is
+re-imported under its `MinAgeDays`/`MaxAgeDays`, even if the file itself hasn't changed. It goes
+to `Import:WorkDirectory` like every download, is read from the ZIP entry named by `Member` (a
+name, or a pattern with `*`/`?`), and deleted right after.
 Only the qualities in `AllowedQualities` (default A and B) are imported: BW's quality C rows
-carry house numbers made up from their coordinates. Sources without a PLZ get the one of the
-OpenStreetMap postcode area around them (`FillMissingPlzFromPostcodeAreas`).
+carry house numbers made up from their coordinates. An Ortsteil that only numbers a district
+(HE's "Frankfurt Bezirk 32") is ignored in favour of the Gemeinde. Sources without a PLZ get the
+one of the OpenStreetMap postcode area around them (`FillMissingPlzFromPostcodeAreas`).
 
 ### Adding another region's source
 

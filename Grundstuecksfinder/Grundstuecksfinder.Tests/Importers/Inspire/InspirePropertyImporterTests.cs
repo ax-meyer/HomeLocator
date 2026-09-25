@@ -887,7 +887,7 @@ public sealed class InspirePropertyImporterTests
         server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
     }
 
-    // ── Addresses from a Hauskoordinaten file (Baden-Württemberg) ────────────
+    // ── Addresses from a Hauskoordinaten file (Baden-Württemberg, Hessen) ────
 
     private const string HkUrl = "http://fake/hk/hk_bw.zip";
 
