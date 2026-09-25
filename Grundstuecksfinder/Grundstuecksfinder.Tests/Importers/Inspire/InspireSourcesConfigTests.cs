@@ -34,6 +34,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("rp", AddressSourceType.ParcelLagebezeichnung)]
     [InlineData("th", AddressSourceType.ParcelLagebezeichnung)]
     [InlineData("hb", AddressSourceType.FlatWfs)]
+    [InlineData("be", AddressSourceType.FlatWfs)]
     public void ShippedSources_UseTheirAddressSource(string source, AddressSourceType type) =>
         ShippedSources().Single(s => s.Source == source).AddressSource.Type.Should().Be(type);
 
@@ -108,5 +109,20 @@ public sealed class InspireSourcesConfigTests
             Street = "stn", HouseNumber = "hnr", HouseNumberSuffix = "adz", Plz = "plz", Ort = "onm", Gemeinde = "onm",
         });
         hb.FillMissingPlzFromPostcodeAreas.Should().BeFalse("every address carries its PLZ");
+    }
+
+    [Fact]
+    public void ShippedSources_BerlinJoinsItsAddressRegisterAsOneGemeinde()
+    {
+        var be = ShippedSources().Single(s => s.Source == "be");
+
+        be.ParcelFeatureType.TypeName.Should().Be("alkis_flurstuecke:flurstuecke");
+        be.ParcelFeatureType.AreaField.Should().Be("afl");
+        be.AddressSource.TypeName.Should().Be("adressen_berlin:adressen_berlin");
+        be.AddressSource.Fields.Should().BeEquivalentTo(new AddressFieldOptions
+        {
+            Street = "str_name", HouseNumber = "hnr", HouseNumberSuffix = "hnr_zusatz", Plz = "plz", Ort = "ort_name", FixedGemeinde = "Berlin",
+        });
+        be.CrsEpsgCode.Should().Be(25833);
     }
 }

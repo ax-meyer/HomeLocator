@@ -119,6 +119,23 @@ public class WfsGmlParserTests
     }
 
     [Fact]
+    public void ParseFlatAddresses_FixedGemeinde_IsEveryAddresss()
+    {
+        using var stream = OpenFixture("addresses_flat_berlin.gml");
+
+        var fields = new Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressFieldOptions
+        {
+            Street = "str_name", HouseNumber = "hnr", HouseNumberSuffix = "hnr_zusatz", Plz = "plz", Ort = "ort_name", FixedGemeinde = "Berlin",
+        };
+        var addresses = WfsGmlParser.ParseFlatAddresses(XDocument.Load(stream), "adressen_berlin", fields).Features;
+
+        addresses.Select(a => (a.Str, a.Hnr, a.HnrZus, a.Plz, a.Ort, a.Gemeinde)).Should().Equal(
+            ("Falkenseer Chaussee", "262", null, "13583", "Falkenhagener Feld", "Berlin"),
+            ("Werderstraße", "22", "C", "13587", "Hakenfelde", "Berlin"));
+        addresses[0].Location.X.Should().Be(376939.67199992, "the point, not the feature's boundedBy envelope");
+    }
+
+    [Fact]
     public void ParseAddresses_SkipsFeatureWithoutAGeometry()
     {
         using var stream = OpenFixture("addresses.gml");

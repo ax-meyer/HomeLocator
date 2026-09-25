@@ -106,7 +106,7 @@ public static class WfsGmlParser
     /// <summary>
     /// Flat address features (<see cref="Addresses.AddressSourceType.FlatWfs"/>): one child
     /// element per field, named as <paramref name="fields"/> maps them, and a gml:Point inside.
-    /// Without an Ort, the Gemeinde stands in for it.
+    /// Without an Ort, the Gemeinde stands in for it; a FixedGemeinde is every address's.
     /// </summary>
     public static WfsPage<AddressFeature> ParseFlatAddresses(XDocument doc, string localName, Addresses.AddressFieldOptions fields)
     {
@@ -120,7 +120,7 @@ public static class WfsGmlParser
             var point = ParsePoint(feature.Descendants().FirstOrDefault(e => e.Name.LocalName == "Point"));
             if (point is null) continue; // nothing to join without a location
 
-            var gemeinde = PlaceNameNormalizer.NormalizePlace(Field(feature, fields.Gemeinde));
+            var gemeinde = PlaceNameNormalizer.NormalizePlace(Field(feature, fields.Gemeinde) ?? fields.FixedGemeinde);
             addresses.Add(new AddressFeature(
                 point,
                 PlaceNameNormalizer.NormalizeStreet(Field(feature, fields.Street)),

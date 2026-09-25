@@ -298,6 +298,26 @@ public sealed class InspireSourceOptionsTests
     }
 
     [Fact]
+    public void Validate_FlatWfsWithBothGemeindeKinds_IsRejected()
+    {
+        var broken = ValidFlatWfs();
+        broken.AddressSource.Fields!.FixedGemeinde = "Berlin";
+
+        InspireSourceOptions.Validate([broken], []).Should().ContainSingle()
+            .Which.Should().Be("hb: AddressSource.Fields.FixedGemeinde and Gemeinde exclude each other.");
+    }
+
+    [Fact]
+    public void Validate_FlatWfsWithAFixedGemeinde_IsValid()
+    {
+        var options = ValidFlatWfs();
+        options.AddressSource.Fields!.Gemeinde = null;
+        options.AddressSource.Fields.FixedGemeinde = "Berlin";
+
+        InspireSourceOptions.Validate([options], []).Should().BeEmpty();
+    }
+
+    [Fact]
     public void Validate_FlatWfsWithoutFields_IsRejected()
     {
         var broken = ValidFlatWfs();
