@@ -69,7 +69,8 @@ public sealed partial class HkFileAddressProvider(
             var addresses = new PreloadedAddresses.Builder();
             // Parsing ~0.5 GB of text is synchronous CPU work; keep it off the caller's thread.
             var result = await Task.Run(() => Read(path, addresses, ct), ct);
-            LogRead(logger, options.Source, result.Rows, result.Accepted, string.Join(",", Settings.Qualities),
+            var qualities = string.Join(",", Settings.Qualities);
+            LogRead(logger, options.Source, result.Rows, result.Accepted, qualities,
                 result.OtherQuality, result.Malformed, stopwatch.Elapsed);
 
             if (result.Accepted == 0)
