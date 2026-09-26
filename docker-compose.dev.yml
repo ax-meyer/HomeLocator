@@ -6,8 +6,9 @@ services:
       POSTGRES_DB: homelocator
       POSTGRES_USER: homelocator
       POSTGRES_PASSWORD: devpassword
+    # Loopback only: the password is in this file, so the database stays off the network.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data
     healthcheck:
