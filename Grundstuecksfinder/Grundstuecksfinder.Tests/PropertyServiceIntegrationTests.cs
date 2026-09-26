@@ -61,6 +61,37 @@ public sealed class PropertyServiceIntegrationTests(PostgresFixture fixture) : I
     }
 
     [Fact]
+    public async Task GetPropertiesAsync_OrdersByPlzThenStreetThenHouseNumber()
+    {
+        await using var context = fixture.CreateContext();
+        var run = NewRun();
+        context.Properties.AddRange(
+            new Property { Str = "Bergstraße", Hnr = "10", Plz = "44139", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Bergstraße", Hnr = "2", HnrZus = "a", Plz = "44139", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Bergstraße", Hnr = "2", Plz = "44141", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Ahornweg", Hnr = "7", Plz = "44141", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Waldweg", Hnr = "1", Plz = "44139", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Ölweg", Hnr = "1", Plz = "44139", Gemeinde = "Dortmund", ImportRun = run },
+            new Property { Str = "Bergstraße", Hnr = "2", Plz = "44139", Gemeinde = "Dortmund", ImportRun = run });
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await using var queryContext = fixture.CreateContext();
+        var service = new PropertyService(queryContext, DisabledSources.None);
+
+        var result = await service.GetPropertiesAsync(gemeinde: "Dortmund", cancellationToken: TestContext.Current.CancellationToken);
+
+        result.Select(p => $"{p.Plz} {p.Str} {p.Hnr}{p.HnrZus}").Should().Equal(
+            "44139 Bergstraße 2",
+            "44139 Bergstraße 2a",
+            "44139 Bergstraße 10",
+            // German order, not byte order: Ö sorts with O, before W.
+            "44139 Ölweg 1",
+            "44139 Waldweg 1",
+            "44141 Ahornweg 7",
+            "44141 Bergstraße 2");
+    }
+
+    [Fact]
     public async Task GetLastCheckedAtAsync_NothingServed_ReturnsNull()
     {
         await using var context = fixture.CreateContext();

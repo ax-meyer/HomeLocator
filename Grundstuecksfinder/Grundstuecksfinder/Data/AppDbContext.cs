@@ -32,6 +32,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<Property>(b =>
         {
+            // Results are ordered by street; the database's default collation compares bytes
+            // and would put Ölweg after Waldweg. No index covers Str, so switching needs no rewrite.
+            b.Property(p => p.Str).UseCollation("de-x-icu");
             b.HasIndex(p => p.Plz);
             b.HasIndex(p => p.Gemeinde);
             b.HasIndex(p => p.Source);

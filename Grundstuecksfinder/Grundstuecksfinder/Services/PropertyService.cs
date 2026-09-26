@@ -43,8 +43,14 @@ public class PropertyService(AppDbContext context, DisabledSources disabledSourc
         if (maxFlaeche.HasValue)
             query = query.Where(p => p.FlaecheAmtl <= maxFlaeche.Value);
 
+        // House numbers are digits (the letter lives in HnrZus), so ordering by length first
+        // sorts them numerically — 2 before 10 — without casting text that could be malformed.
+        // Postgres puts NULLs last, so 2 needs its own key to come before 2a.
         return await query
-            .OrderBy(p => p.Str).ThenBy(p => p.Hnr)
+            .OrderBy(p => p.Plz)
+            .ThenBy(p => p.Str)
+            .ThenBy(p => p.Hnr!.Length).ThenBy(p => p.Hnr)
+            .ThenBy(p => p.HnrZus != null).ThenBy(p => p.HnrZus)
             .Take(limit)
             .ToListAsync(cancellationToken);
     }
