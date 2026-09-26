@@ -61,3 +61,7 @@ Grundstuecksfinder/Grundstuecksfinder.sln.DotSettings.user
 
 # Claude Code session data (worktrees, local settings)
 .claude/
+
+# Per-deployment docker compose overrides (e.g. local disk layout) — not part of the
+# published stack. Compose merges this automatically when present.
+docker-compose.override.yml
