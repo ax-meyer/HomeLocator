@@ -90,6 +90,28 @@ public sealed class PropertyServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetPropertiesAsync_OrdersByPlzThenStreetThenHouseNumber()
+    {
+        _context.Properties.AddRange(
+            new Property { Str = "Bergstraße", Hnr = "2", HnrZus = "b", Plz = "44139", Gemeinde = "Dortmund" },
+            new Property { Str = "Bergstraße", Hnr = "2", HnrZus = "a", Plz = "44139", Gemeinde = "Dortmund" },
+            new Property { Str = "Bergstraße", Hnr = "2", Plz = "44139", Gemeinde = "Dortmund" },
+            new Property { Str = "Bergstraße", Hnr = "2", Plz = "44141", Gemeinde = "Dortmund" });
+        await _context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var result = await _service.GetPropertiesAsync(gemeinde: "Dortmund", cancellationToken: TestContext.Current.CancellationToken);
+
+        // Numerically, not as text: Bergstraße 2 comes before Bergstraße 10.
+        result.Select(p => $"{p.Plz} {p.Str} {p.Hnr}{p.HnrZus}").Should().Equal(
+            "44139 Bergstraße 2",
+            "44139 Bergstraße 2a",
+            "44139 Bergstraße 2b",
+            "44139 Bergstraße 10",
+            "44139 Waldweg 5",
+            "44141 Bergstraße 2");
+    }
+
+    [Fact]
     public async Task GetPropertiesAsync_LimitIsRespected()
     {
         var result = await _service.GetPropertiesAsync(limit: 2, cancellationToken: TestContext.Current.CancellationToken);
