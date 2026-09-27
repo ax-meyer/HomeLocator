@@ -82,7 +82,8 @@ else
         </p>
 
         <div class="result-cards">
-            <RadzenDataList TItem="Property" Data="@_properties" AllowPaging="true" PageSize="36"
+            @* Keyed by search: a new result set starts on page 1 instead of keeping a page it may no longer have. *@
+            <RadzenDataList @key="_searchCount" TItem="Property" Data="@_properties" AllowPaging="true" PageSize="36"
                             PagerHorizontalAlign="HorizontalAlign.Center" PageNumbersCount="5"
                             WrapItems="false">
                 <Template Context="property">
@@ -131,6 +132,8 @@ else if (_searchError is null)
     private double? _minFlaeche;
     private double? _maxFlaeche;
     private List<Property> _properties = [];
+    // Bumped by every search that loads results; keys the result list (see the markup).
+    private int _searchCount;
     private bool _searched;
     private bool _loading;
     private string? _searchError;
@@ -209,6 +212,7 @@ else if (_searchError is null)
                 _openCards.Clear();
                 AppMetrics.RecordSearch();
                 _properties = await SearchThrottle.SearchAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
+                _searchCount++;
                 _searched = true;
             } while (_rerunSearch);
         }
