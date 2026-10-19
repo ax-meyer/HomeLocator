@@ -40,7 +40,7 @@ local imports in September 2026.
 | Hamburg | INSPIRE WFS | INSPIRE WFS (startIndex) | dl-de/by-2.0 | 0.30 M | 10 min |
 | Hessen | INSPIRE WFS | Hauskoordinaten file | dl-de/zero-2.0 | 1.63 M | 2 h 25 min |
 | Niedersachsen | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 2.64 M | 2 h 15 min |
-| Nordrhein-Westfalen | Grundsteuer bulk file | (same file) | dl-de/zero-2.0 | 3.95 M | 5 min |
+| Nordrhein-Westfalen | Grundsteuer bulk file | (same file); positions from the Gebäudereferenzen (GEBREF) file | dl-de/zero-2.0 | 3.95 M | 5 min |
 | Rheinland-Pfalz | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | dl-de/by-2.0 | 1.73 M | 1 h 40 min |
 | Saarland | INSPIRE WFS | Hauskoordinaten OGC API | dl-de/by-2.0, CC BY 4.0 | 0.34 M | 8 min |
 | Sachsen | INSPIRE WFS | INSPIRE WFS | dl-de/by-2.0 | 0.99 M | 50 min |

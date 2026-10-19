@@ -12,6 +12,14 @@ public class NrwImporterOptions
     public string BaseDownloadUrl { get; set; } = "https://www.opengeodata.nrw.de/produkte/infrastruktur_bauen_wohnen/grundsteuer/";
 
     /// <summary>
+    /// Listing of the Gebäudereferenzen (GEBREF), the official building coordinates the rows get
+    /// their map position from; same manifest format as <see cref="ManifestUrl"/>. Empty imports
+    /// NRW without coordinates.
+    /// </summary>
+    public string? GebrefManifestUrl { get; set; } = "https://www.opengeodata.nrw.de/produkte/geobasis/lk/akt/gebref_txt/index.json";
+    public string GebrefBaseDownloadUrl { get; set; } = "https://www.opengeodata.nrw.de/produkte/geobasis/lk/akt/gebref_txt/";
+
+    /// <summary>
     /// Limit for one attempt at the manifest or the ZIP, covering the whole body. Needed because
     /// HttpClient.Timeout stops counting once the response headers have arrived, so a server
     /// stalling mid-download would otherwise hang the import indefinitely. The ZIP is about 1 GB.

@@ -19,6 +19,17 @@ public sealed class MapLinksTests
     public void Google_SearchesTheAddress_EvenWithCoordinates() =>
         MapLinks.Google(Berlin).Should().Be("https://www.google.com/maps/search/Bergstra%C3%9Fe%2019A%2C%2010115%2C%20Mitte");
 
+    [Theory]
+    [InlineData("17", "uneindeutig", "Kinderhauser%20Stra%C3%9Fe%2017%2C%2048149%2C%20M%C3%BCnster")]
+    [InlineData("uneindeutig", null, "Kinderhauser%20Stra%C3%9Fe%2C%2048149%2C%20M%C3%BCnster")]
+    [InlineData("uneindeutig", "uneindeutig", "Kinderhauser%20Stra%C3%9Fe%2C%2048149%2C%20M%C3%BCnster")]
+    public void Google_LeavesNrwsUneindeutigPlaceholderOut(string hnr, string? suffix, string query)
+    {
+        var property = new Property { Str = "Kinderhauser Straße", Hnr = hnr, HnrZus = suffix, Plz = "48149", Ort = "Münster", Source = "nrw" };
+
+        MapLinks.Google(property).Should().Be($"https://www.google.com/maps/search/{query}");
+    }
+
     [Fact]
     public void Osm_WithCoordinates_SetsAMarker() =>
         MapLinks.Osm(Berlin, Pin).Should().Be("https://www.openstreetmap.org/?mlat=52.531174&mlon=13.395007&zoom=17");
