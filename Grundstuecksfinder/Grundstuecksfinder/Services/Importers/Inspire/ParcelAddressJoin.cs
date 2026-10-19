@@ -64,6 +64,7 @@ public sealed partial class ParcelAddressJoin(
         if (tileAddresses.Loaded is { } loaded && loaded != probedAddresses)
             run.ReportFingerprint(InspireProbe.Combine(probe.Parcels, loaded).Fingerprint);
         var plzStats = new PlzFillStats();
+        var toLonLat = new UtmToLonLat(options.CrsEpsgCode!.Value);
 
         // A tile may carry its parcels along: when only the address page of a tile was full, its
         // (complete) parcel page is filtered down to the child tiles instead of fetched again.
@@ -139,6 +140,7 @@ public sealed partial class ParcelAddressJoin(
                     continue;
                 }
 
+                var (lon, lat) = toLonLat.Transform(address.Location.X, address.Location.Y);
                 yield return new Property
                 {
                     Str = address.Str,
@@ -148,6 +150,9 @@ public sealed partial class ParcelAddressJoin(
                     Ort = address.Ort,
                     Gemeinde = address.Gemeinde,
                     FlaecheAmtl = area.Value,
+                    // The address's own point, so the card's pin is the house itself.
+                    Lat = (float)lat,
+                    Lon = (float)lon,
                 };
             }
         }

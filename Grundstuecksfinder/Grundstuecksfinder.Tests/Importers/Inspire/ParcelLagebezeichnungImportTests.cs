@@ -100,6 +100,30 @@ public sealed class ParcelLagebezeichnungImportTests
     }
 
     [Fact]
+    public async Task FetchAsync_ParcelWithOneAddress_PinsItAtTheParcel()
+    {
+        var server = Server(Cell(1, 0, "Steingasse 3"));
+
+        var rows = await FetchAllAsync(Importer(server, Options()));
+
+        // The 10 m cell over (10,0)–(20,10): its interior point is the centre.
+        var (lon, lat) = new UtmToLonLat(25832).Transform(15, 5);
+        var row = rows.Should().ContainSingle().Subject;
+        row.Lon.Should().Be((float)lon);
+        row.Lat.Should().Be((float)lat);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ParcelWithSeveralAddresses_LeavesThemToGeocoding()
+    {
+        var server = Server(Cell(0, 0, "Vordere Synagogenstraße 2, 2 A"));
+
+        var rows = await FetchAllAsync(Importer(server, Options()));
+
+        rows.Should().HaveCount(2).And.OnlyContain(r => r.Lat == null && r.Lon == null);
+    }
+
+    [Fact]
     public async Task FetchAsync_AddressTwoParcelsName_YieldsARowForEach()
     {
         // The cadastre assigns the house number to both parcels; each has its own area, and the
@@ -229,7 +253,7 @@ public sealed class ParcelLagebezeichnungImportTests
         var probe = await importer.ProbeAsync(TestContext.Current.CancellationToken);
         await FetchAllAsync(importer);
 
-        probe.Fingerprint.Should().Be("2");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:2");
         probe.Kind.Should().Be(FingerprintKind.Approximate);
         probe.Should().BeOfType<InspireProbe>().Which.Addresses.Should().BeNull();
         server.Requests.Should().OnlyContain(u => u.ToString().StartsWith(FakeWfsServer.ParcelUrl, StringComparison.Ordinal));

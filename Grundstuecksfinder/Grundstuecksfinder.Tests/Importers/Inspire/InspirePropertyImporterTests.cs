@@ -132,6 +132,18 @@ public sealed class InspirePropertyImporterTests
     }
 
     [Fact]
+    public async Task FetchAsync_RowsCarryTheAddressPointInLonLat()
+    {
+        var rows = await FetchAllAsync(Importer(GridServer(2), Options()));
+
+        // Cell 01_00's address sits at (15, 5) in the source's EPSG 25832.
+        var (lon, lat) = new UtmToLonLat(25832).Transform(15, 5);
+        var row = rows.Single(r => r.Str == "Straße 01_00");
+        row.Lon.Should().Be((float)lon);
+        row.Lat.Should().Be((float)lat);
+    }
+
+    [Fact]
     public async Task FetchAsync_TileComesBackFull_IsSplitUntilEverythingFits()
     {
         var server = GridServer(10); // 100 parcels, 100 addresses in the single initial tile
@@ -570,7 +582,7 @@ public sealed class InspirePropertyImporterTests
         // the planner's decision.
         var probe = await Importer(GridServer(2), Options()).ProbeAsync(TestContext.Current.CancellationToken);
 
-        probe.Fingerprint.Should().Be("4:4");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:4:4");
         probe.Kind.Should().Be(FingerprintKind.Approximate);
     }
 
@@ -584,7 +596,7 @@ public sealed class InspirePropertyImporterTests
 
         probe.Should().BeOfType<InspireProbe>().Which.Should().BeEquivalentTo(new
         {
-            Fingerprint = "3:4",
+            Fingerprint = $"{InspireProbe.Revision}:3:4",
             Parcels = new FingerprintPart("3", IsExact: false),
             Addresses = new FingerprintPart("4", IsExact: false),
         });
@@ -883,7 +895,7 @@ public sealed class InspirePropertyImporterTests
         var probe = await Importer(server, Options(o => o.AddressSource.Type = AddressSourceType.OgcApiFeatures))
             .ProbeAsync(TestContext.Current.CancellationToken);
 
-        probe.Fingerprint.Should().Be("4:4");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:4:4");
         server.OgcApiRequests(FakeWfsServer.AddressUrl).Should().ContainSingle(u => u.Query.Contains("limit=1"));
     }
 
@@ -976,7 +988,7 @@ public sealed class InspirePropertyImporterTests
 
         var probe = await Importer(server, options).ProbeAsync(TestContext.Current.CancellationToken);
 
-        probe.Fingerprint.Should().Be("4:\"4607dc5-656a14021d8ec\"|2026-07-15T07:27:05Z");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:4:\"4607dc5-656a14021d8ec\"|2026-07-15T07:27:05Z");
         probe.Kind.Should().Be(FingerprintKind.Approximate, "the parcel count from the WFS is only approximate");
         probe.Should().BeOfType<InspireProbe>().Which.Addresses!.IsExact.Should().BeTrue("the file's own version is exact");
     }

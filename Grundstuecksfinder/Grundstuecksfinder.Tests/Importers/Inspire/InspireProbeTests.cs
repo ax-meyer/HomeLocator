@@ -1,6 +1,9 @@
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers;
+using Grundstuecksfinder.Models;
 using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Scheduling;
+using Grundstuecksfinder.Tests.TestHelpers;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Inspire;
@@ -10,7 +13,7 @@ public sealed class InspireProbeTests
     [Fact]
     public void Combine_JoinsThePartsParcelsFirst() =>
         InspireProbe.Combine(new FingerprintPart("123", false), new FingerprintPart("456", false))
-            .Fingerprint.Should().Be("123:456");
+            .Fingerprint.Should().Be($"{InspireProbe.Revision}:123:456");
 
     [Fact]
     public void Combine_KeepsBothPartsForTheFetch()
@@ -43,10 +46,35 @@ public sealed class InspireProbeTests
 
         var probe = InspireProbe.ParcelsOnly(parcels);
 
-        probe.Fingerprint.Should().Be("6208246");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:6208246");
         probe.Kind.Should().Be(FingerprintKind.Approximate);
         probe.Parcels.Should().Be(parcels);
         probe.Addresses.Should().BeNull();
+    }
+
+    [Fact]
+    public void Revision_MakesRowsImportedBeforeItDue()
+    {
+        // Served before r2: the same upstream version, but rows without coordinates.
+        var probe = InspireProbe.Combine(new FingerprintPart("\"a\"", true), new FingerprintPart("\"b\"", true));
+        var served = new ServedImport("\"a\":\"b\"", ImportSeed.Day(0));
+
+        var plan = RefreshPlanner.Plan(
+            [new SourceStatus("be", RefreshPolicy.Default, probe, served)], ImportSeed.Day(1), maxRoutineImportsPerRun: 1);
+
+        plan.Imports.Should().ContainSingle().Which.Reason.Should().Be(ImportReason.Changed);
+    }
+
+    [Fact]
+    public void Revision_IsStable_SoAnUnchangedSourceStaysUpToDate()
+    {
+        var probe = InspireProbe.Combine(new FingerprintPart("\"a\"", true), new FingerprintPart("\"b\"", true));
+        var served = new ServedImport(probe.Fingerprint, ImportSeed.Day(0));
+
+        var plan = RefreshPlanner.Plan(
+            [new SourceStatus("be", RefreshPolicy.Default, probe, served)], ImportSeed.Day(1), maxRoutineImportsPerRun: 1);
+
+        plan.UpToDate.Should().Equal("be");
     }
 
     [Fact]

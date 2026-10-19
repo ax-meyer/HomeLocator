@@ -64,6 +64,28 @@ public sealed class PropertyBulkWriterTests(PostgresFixture fixture) : IAsyncLif
     }
 
     [Fact]
+    public async Task WriteAsync_KeepsCoordinatesWhereTheSourceHasThem()
+    {
+        var run = await NewRunAsync("v1");
+        var ct = TestContext.Current.CancellationToken;
+
+        await new PropertyBulkWriter(fixture.DataSource).WriteAsync(run, Rows(), ct);
+
+        await using var context = fixture.CreateContext();
+        var stored = await context.Properties.OrderBy(p => p.Str).Select(p => new { p.Str, p.Lat, p.Lon }).ToListAsync(ct);
+        stored.Should().Equal(
+            new { Str = (string?)"Ackerstraße 3E", Lat = (float?)52.53011335f, Lon = (float?)13.39878701f },
+            new { Str = (string?)"Hauptstraße 1", Lat = (float?)null, Lon = (float?)null });
+
+        static async IAsyncEnumerable<Property> Rows()
+        {
+            await Task.Yield();
+            yield return new Property { Str = "Ackerstraße 3E", Hnr = "3", FlaecheAmtl = 3387, Lat = 52.53011335f, Lon = 13.39878701f, Source = "a" };
+            yield return new Property { Str = "Hauptstraße 1", Hnr = "1", FlaecheAmtl = 320, Source = "a" };
+        }
+    }
+
+    [Fact]
     public async Task WriteAsync_SkippedPartsReportedByTheFetch_AreRecordedOnTheRun()
     {
         var run = await NewRunAsync("v1");
