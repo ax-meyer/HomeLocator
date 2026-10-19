@@ -40,6 +40,7 @@ public sealed partial class ParcelLagebezeichnungImport(
         var parcelLimit = await parcels.GetPageLimitAsync(ct);
         var postcodes = await LoadPostcodeAreasAsync(ct);
         var expected = await parcels.RequireCountAsync(Source, ct);
+        var toLonLat = new UtmToLonLat(options.CrsEpsgCode!.Value);
 
         var pending = new Stack<Tile>(Tile.Grid(options.BoundingBox, options.TileSizeMeters).Reverse());
         LogFetchingTiles(logger, Source, pending.Count, parcelLimit, parcels.TypeName);
@@ -91,6 +92,9 @@ public sealed partial class ParcelLagebezeichnungImport(
                 var plz = postcodes?.FindPostcode(anchor);
                 if (plz is not null) plzFilled += text.Addresses.Count;
                 var gemeinde = PlaceNameNormalizer.NormalizePlace(parcel.Gemeinde);
+                // No address points here, only the parcel. Its anchor is a fair pin for the one
+                // house on it; with several the pin would mark none of them, so those geocode.
+                (double Lon, double Lat)? pin = text.Addresses.Count == 1 ? toLonLat.Transform(anchor.X, anchor.Y) : null;
                 foreach (var address in text.Addresses)
                 {
                     rowCount++;
@@ -104,6 +108,8 @@ public sealed partial class ParcelLagebezeichnungImport(
                         Ort = gemeinde,
                         Gemeinde = gemeinde,
                         FlaecheAmtl = parcel.AreaM2,
+                        Lat = (float?)pin?.Lat,
+                        Lon = (float?)pin?.Lon,
                     };
                 }
             }

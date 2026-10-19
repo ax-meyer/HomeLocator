@@ -90,7 +90,7 @@ public partial class PropertyBulkWriter(
         // in between, so idle-connection timeouts can't kill a long import.
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         await using var writer = await conn.BeginBinaryImportAsync(
-            "COPY \"PropertyStaging\" (\"Str\", \"Hnr\", \"HnrZus\", \"Plz\", \"Ort\", \"Gemeinde\", \"FlaecheAmtl\", \"Source\") FROM STDIN (FORMAT BINARY)", ct);
+            "COPY \"PropertyStaging\" (\"Str\", \"Hnr\", \"HnrZus\", \"Plz\", \"Ort\", \"Gemeinde\", \"FlaecheAmtl\", \"Lat\", \"Lon\", \"Source\") FROM STDIN (FORMAT BINARY)", ct);
 
         foreach (var property in batch)
         {
@@ -106,6 +106,9 @@ public partial class PropertyBulkWriter(
                 await writer.WriteAsync(property.FlaecheAmtl.Value, NpgsqlDbType.Double, ct);
             else
                 await writer.WriteNullAsync(ct);
+
+            await WriteNullableRealAsync(writer, property.Lat, ct);
+            await WriteNullableRealAsync(writer, property.Lon, ct);
 
             await writer.WriteAsync(source, NpgsqlDbType.Text, ct);
         }
@@ -139,8 +142,8 @@ public partial class PropertyBulkWriter(
         }
 
         await using (var insert = new NpgsqlCommand("""
-            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", "ImportRunId")
-            SELECT "Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Source", $2
+            INSERT INTO "Properties" ("Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Lat", "Lon", "Source", "ImportRunId")
+            SELECT "Str", "Hnr", "HnrZus", "Plz", "Ort", "Gemeinde", "FlaecheAmtl", "Lat", "Lon", "Source", $2
             FROM "PropertyStaging" WHERE "Source" = $1
             """, conn, tx))
         {
@@ -215,6 +218,14 @@ public partial class PropertyBulkWriter(
     {
         if (value != null)
             await writer.WriteAsync(value, NpgsqlDbType.Text, ct);
+        else
+            await writer.WriteNullAsync(ct);
+    }
+
+    private static async Task WriteNullableRealAsync(NpgsqlBinaryImporter writer, float? value, CancellationToken ct)
+    {
+        if (value.HasValue)
+            await writer.WriteAsync(value.Value, NpgsqlDbType.Real, ct);
         else
             await writer.WriteNullAsync(ct);
     }

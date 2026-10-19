@@ -99,7 +99,7 @@ public sealed class FlatWfsAddressProviderTests
     {
         var (probe, _) = await ImportAsync(Importer(Server(), Options()));
 
-        probe.Fingerprint.Should().Be("4:4");
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}:4:4");
         probe.Kind.Should().Be(FingerprintKind.Approximate);
     }
 

@@ -87,7 +87,7 @@ public sealed class InspirePropertyImporterIntegrationTests(PostgresFixture fixt
         await using var context = fixture.CreateContext();
         var run = (await context.ImportRuns.ToListAsync(TestContext.Current.CancellationToken)).Should().ContainSingle().Subject;
         run.Source.Should().Be(Source);
-        run.Fingerprint.Should().Be("2:2", "the fingerprint is the parcel and address hit counts");
+        run.Fingerprint.Should().Be($"{InspireProbe.Revision}:2:2", "the fingerprint is the parcel and address hit counts");
         run.Reason.Should().Be(ImportReason.Initial);
         run.RecordCount.Should().Be(2);
         run.CompletedAt.Should().NotBeNull();

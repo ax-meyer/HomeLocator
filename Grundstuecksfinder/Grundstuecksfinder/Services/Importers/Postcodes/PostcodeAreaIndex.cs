@@ -4,8 +4,6 @@ using NetTopologySuite.Geometries.Prepared;
 using NetTopologySuite.Index.Strtree;
 using NetTopologySuite.IO;
 using Newtonsoft.Json;
-using ProjNet.CoordinateSystems;
-using ProjNet.CoordinateSystems.Transformations;
 
 namespace Grundstuecksfinder.Services.Importers.Postcodes;
 
@@ -24,15 +22,9 @@ public interface IPostcodeLookup
 public sealed class PostcodeAreaIndex : IPostcodeLookup
 {
     private readonly STRtree<(IPreparedGeometry Area, double Size, string Postcode)> _tree = new();
-    private readonly MathTransform _toLonLat;
+    private readonly UtmToLonLat _toLonLat;
 
-    private PostcodeAreaIndex(int utmEpsg)
-    {
-        // ETRS89 and WGS84 differ by well under a metre, far below what matters for a PLZ area.
-        var utm = ProjectedCoordinateSystem.WGS84_UTM(utmEpsg - 25800, zoneIsNorth: true);
-        _toLonLat = new CoordinateTransformationFactory()
-            .CreateFromCoordinateSystems(utm, GeographicCoordinateSystem.WGS84).MathTransform;
-    }
+    private PostcodeAreaIndex(int utmEpsg) => _toLonLat = new UtmToLonLat(utmEpsg);
 
     /// <summary>Number of postcode areas kept.</summary>
     public int Count { get; private set; }
