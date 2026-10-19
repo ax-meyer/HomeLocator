@@ -2,6 +2,14 @@ html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
+/* iOS Safari zooms into any focused field under 16px, and Radzen's inputs default to 14px.
+   -md feeds the md-sized controls; the base value reaches the dropdown's filter box, whose
+   popup Radzen moves to <body>. html:root outranks the themes' :root, which load later. */
+html:root {
+    --rz-input-font-size: 1rem;
+    --rz-input-font-size-md: 1rem;
+}
+
 a, .btn-link {
     color: #006bb7;
 }
