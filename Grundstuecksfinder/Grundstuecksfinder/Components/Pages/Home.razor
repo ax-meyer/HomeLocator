@@ -247,6 +247,13 @@ else if (_searchError is null)
 
         AppMetrics.RecordTableRowOpen();
         if (_coords.ContainsKey(property.Id)) return;
+        // The source's own point where it has one: the official house coordinate, no geocoding.
+        // Rounded, so the links show 52.530113 rather than the float's 52.530113220214844.
+        if (property is { Lat: { } lat, Lon: { } lon })
+        {
+            _coords[property.Id] = (Math.Round((double)lat, 6), Math.Round((double)lon, 6));
+            return;
+        }
         var coords = await GeocodingService.GeocodeAsync(property);
         if (coords.HasValue)
         {
