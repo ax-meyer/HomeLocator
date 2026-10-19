@@ -21,6 +21,9 @@ public sealed class NrwPropertyImporterTests : IDisposable
     private const string BaseDownloadUrl = "https://example.invalid/";
     private const string ZipFileName = "grundsteuerdaten.zip";
     private const string ZipUrl = BaseDownloadUrl + ZipFileName;
+    private const string GebrefManifestUrl = "https://example.invalid/gebref/index.json";
+    private const string GebrefBaseUrl = "https://example.invalid/gebref/";
+    private const string GebrefZipName = "gebref_EPSG25832_ASCII.zip";
 
     /// <summary>Per test, so tests running in parallel never share the fixed download name.</summary>
     private readonly string _workDirectory = Path.Combine(Path.GetTempPath(), $"grundstuecksfinder-test-{Guid.NewGuid():N}");
@@ -33,7 +36,8 @@ public sealed class NrwPropertyImporterTests : IDisposable
 
     private string DownloadPath => Path.Combine(_workDirectory, NrwPropertyImporter.DownloadFileName);
 
-    private NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800)
+    // GEBREF is off by default: most tests are about the Grundsteuer download alone.
+    private NrwPropertyImporter Importer(FakeHttpMessageHandler handler, TimeProvider? time = null, double timeoutSeconds = 1800, bool gebref = false)
     {
         var factory = A.Fake<IHttpClientFactory>();
         A.CallTo(() => factory.CreateClient(A<string>._)).ReturnsLazily(() => new HttpClient(handler));
@@ -45,6 +49,8 @@ public sealed class NrwPropertyImporterTests : IDisposable
             RetryBaseDelaySeconds = 0,
             MaxRetryDelaySeconds = 0,
             DownloadTimeoutSeconds = timeoutSeconds,
+            GebrefManifestUrl = gebref ? GebrefManifestUrl : null,
+            GebrefBaseDownloadUrl = GebrefBaseUrl,
         });
         return new NrwPropertyImporter(NullLogger<NrwPropertyImporter>.Instance, factory, options, time, _workDirectory);
     }
@@ -105,6 +111,122 @@ public sealed class NrwPropertyImporterTests : IDisposable
 
         probe.Should().Be(new NrwProbe("grundsteuerdaten_2026.zip", "grundsteuerdaten_2026.zip@2026-06-08T14:19:03"));
         probe.Kind.Should().Be(FingerprintKind.Exact, "the publisher's own timestamp: an unchanged edition is never downloaded again");
+    }
+
+    private static byte[] Zip(string entryName, string content)
+    {
+        using var ms = new MemoryStream();
+        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using var stream = archive.CreateEntry(entryName).Open();
+            stream.Write(Encoding.UTF8.GetBytes(content));
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Grundsteuer and GEBREF routes; GEBREF knows the CSV's Hauptstraße 1 in Köln as "Hauptstr.".</summary>
+    private static FakeHttpMessageHandler WithGebref(string? gebrefTxt = null)
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(ZipWithOneRow()) });
+        handler.AddRoute(GebrefManifestUrl, () => Json(
+            $$"""{"datasets":[{"name":"gebref","files":[{"name":"{{GebrefZipName}}","timestamp":"2026-07-28T11:37:57"}]}]}"""));
+        handler.AddRoute(GebrefBaseUrl + GebrefZipName, () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Zip("gebref.txt",
+                gebrefTxt ?? GebrefIndexTests.Line("Köln", "Hauptstr.", "1", "", 356000.5, 5645000.5))),
+        });
+        return handler;
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WithGebref_FingerprintsBothEditions()
+    {
+        var probe = await Importer(WithGebref(), gebref: true).ProbeAsync(TestContext.Current.CancellationToken);
+
+        // A new GEBREF moves or adds positions, so it re-imports NRW like a new Grundsteuer edition.
+        probe.Should().Be(new NrwProbe(ZipFileName,
+            $"{ZipFileName}@2026-06-08T14:19:03|{GebrefZipName}@2026-07-28T11:37:57", GebrefZipName));
+        probe.Kind.Should().Be(FingerprintKind.Exact);
+    }
+
+    [Fact]
+    public async Task FetchAsync_WithGebref_GivesRowsTheirBuildingsPosition()
+    {
+        var rows = await FetchAllAsync(Importer(WithGebref(), gebref: true));
+
+        var (lon, lat) = new UtmToLonLat(25832).Transform(356000.5, 5645000.5);
+        var row = rows.Should().ContainSingle().Subject;
+        row.Lat.Should().Be((float)lat);
+        row.Lon.Should().Be((float)lon);
+    }
+
+    [Fact]
+    public async Task FetchAsync_AddressGebrefDoesNotKnow_StaysWithoutPosition()
+    {
+        var rows = await FetchAllAsync(Importer(
+            WithGebref(GebrefIndexTests.Line("Köln", "Hauptstr.", "2", "", 356000, 5645000)), gebref: true));
+
+        rows.Should().ContainSingle().Which.Lat.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FetchAsync_SuffixUneindeutig_TakesTheNumbersOwnBuilding()
+    {
+        var handler = WithGebref(string.Join('\n',
+            GebrefIndexTests.Line("Köln", "Hauptstr.", "1", "", 356000.5, 5645000.5),
+            GebrefIndexTests.Line("Köln", "Hauptstr.", "1", "a", 356020.5, 5645010.5)));
+        handler.AddRoute(ZipUrl, () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Zip("part.csv", """
+                id;a;b;c;str;hnr;hnr_zus;plz;ort;gemeinde;j;k;l;m;n;o;flaeche_amtl
+                1;;;;Hauptstraße;1;uneindeutig;50667;Köln;Köln;;;;;;;320
+                2;;;;Hauptstraße;2;uneindeutig;50667;Köln;Köln;;;;;;;320
+                """)),
+        });
+
+        var rows = await FetchAllAsync(Importer(handler, gebref: true));
+
+        var (lon, lat) = new UtmToLonLat(25832).Transform(356000.5, 5645000.5);
+        rows[0].Lat.Should().Be((float)lat, "the parcel holds no. 1 and 1a; no. 1's building is on it");
+        rows[0].Lon.Should().Be((float)lon);
+        rows[1].Lat.Should().BeNull("GEBREF knows no no. 2 at all");
+    }
+
+    [Fact]
+    public async Task FetchAsync_WithGebref_DeletesBothDownloads()
+    {
+        await FetchAllAsync(Importer(WithGebref(), gebref: true));
+
+        Directory.EnumerateFiles(_workDirectory).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FetchAsync_GebrefZipWithoutItsTextFile_FailsBeforeTheBigDownload()
+    {
+        var handler = WithGebref();
+        handler.AddRoute(GebrefBaseUrl + GebrefZipName, () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Zip("readme.txt", "moved")),
+        });
+
+        var act = () => FetchAllAsync(Importer(handler, gebref: true));
+
+        await act.Should().ThrowAsync<InvalidDataException>().WithMessage("*gebref.txt*");
+        handler.RequestedUris.Should().NotContain(new Uri(ZipUrl));
+        Directory.EnumerateFiles(_workDirectory).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WithoutGebref_IsTheGrundsteuerEditionAlone()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.AddRoute(ManifestUrl, Manifest);
+
+        var probe = await Importer(handler).ProbeAsync(TestContext.Current.CancellationToken);
+
+        probe.Should().Be(new NrwProbe(ZipFileName, $"{ZipFileName}@2026-06-08T14:19:03"));
     }
 
     [Fact]

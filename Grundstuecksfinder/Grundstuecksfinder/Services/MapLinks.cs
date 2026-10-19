@@ -57,6 +57,11 @@ public static class MapLinks
     private static string AddressQuery(Property property) =>
         Uri.EscapeDataString(
             string.Join(", ",
-                new[] { $"{property.Str} {property.Hnr}{property.HnrZus}", property.Plz, property.Ort }
+                new[] { $"{property.Str} {Known(property.Hnr)}{Known(property.HnrZus)}".Trim(), property.Plz, property.Ort }
                     .Where(s => !string.IsNullOrWhiteSpace(s))));
+
+    // NRW's Grundsteuer CSV writes "uneindeutig" where the cadastre's number or suffix isn't
+    // unique; searched for, "Kinderhauser Straße 17uneindeutig" finds nothing, "… 17" the house.
+    private static string? Known(string? part) =>
+        string.Equals(part?.Trim(), "uneindeutig", StringComparison.OrdinalIgnoreCase) ? null : part;
 }
