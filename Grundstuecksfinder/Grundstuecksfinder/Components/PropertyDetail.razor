@@ -60,39 +60,10 @@
         <span class="visually-hidden">(externer Link)</span>
     };
 
-    private string AddressQuery =>
-        Uri.EscapeDataString(
-            string.Join(", ",
-                new[] { $"{Property.Str} {Property.Hnr}{Property.HnrZus}", Property.Plz, Property.Ort }
-                    .Where(s => !string.IsNullOrWhiteSpace(s))));
-
-    // Use FormattableString.Invariant to ensure dots as decimal separators in URLs,
-    // regardless of the server's culture (e.g. German locale uses commas).
-    private string GoogleMapsUrl => Coords != default
-        ? FormattableString.Invariant($"https://www.google.com/maps?q={Coords.Lat},{Coords.Lon}")
-        : $"https://www.google.com/maps/search/{AddressQuery}";
-
-    private string OsmUrl => Coords != default
-        ? FormattableString.Invariant($"https://www.openstreetmap.org/?mlat={Coords.Lat}&mlon={Coords.Lon}&zoom=17")
-        : $"https://www.openstreetmap.org/search?query={AddressQuery}";
-
-    private string? LaermUrl => Property.Source switch
-    {
-        "nrw" => Coords != default
-            ? FormattableString.Invariant($"https://www.umgebungslaerm-kartierung.nrw.de/#map=15/{Coords.Lon}/{Coords.Lat}")
-            : "https://www.umgebungslaerm-kartierung.nrw.de/",
-        "sh" => "https://danord.gdi-sh.de/viewer/resources/apps/umgebungslaerm/index.html?lang=de",
-        _ => null,
-    };
-
-    private string? HochwasserUrl => Property.Source switch
-    {
-        "nrw" => Coords != default
-            ? FormattableString.Invariant($"https://www.hochwasserkarten.nrw.de/?lat={Coords.Lat}&lon={Coords.Lon}&zoom=15")
-            : "https://www.hochwasserkarten.nrw.de/",
-        // "sh" — deep linking broken (redirects to Cadenza login); revisit later
-        _ => null,
-    };
+    private string GoogleMapsUrl => MapLinks.Google(Property);
+    private string OsmUrl => MapLinks.Osm(Property, Coords);
+    private string? LaermUrl => MapLinks.Noise(Property.Source);
+    private string? HochwasserUrl => MapLinks.Flood(Property.Source, Coords);
 
     private string DisplayAddress =>
         string.Join(", ",
