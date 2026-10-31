@@ -11,6 +11,12 @@ namespace Grundstuecksfinder.Services.Importers.Inspire;
 public sealed record ParcelFeature(Geometry Geometry, double AreaM2, string? Gemeinde = null, string? Lagebezeichnung = null);
 
 /// <summary>
+/// A parsed building that names addresses: its outline and its Lagebezeichnungen as text, in
+/// the same form as a parcel's (see <see cref="LagebezeichnungParser"/>).
+/// </summary>
+public sealed record BuildingFeature(Geometry Geometry, string Lagebezeichnung);
+
+/// <summary>
 /// One parsed GetFeature response. <see cref="MemberCount"/> counts every returned feature,
 /// including ones the parser skipped as malformed, so "the page is full" can be judged
 /// against the requested count. <see cref="SrsNames"/> are the CRSs the geometries claim.
@@ -50,12 +56,39 @@ public static class WfsGmlParser
             if (!double.TryParse(Field(parcel, type.AreaField), NumberStyles.Any, CultureInfo.InvariantCulture, out var area))
                 continue;
 
-            var geometry = ParseParcelGeometry(parcel);
+            var geometry = ParseSurfaceGeometry(parcel);
             if (geometry is null) continue;
 
             parcels.Add(new ParcelFeature(geometry, area, Field(parcel, type.GemeindeField), Field(parcel, type.LagebezeichnungField)));
         }
         return new WfsPage<ParcelFeature>(parcels, members.Count, SrsNames(doc));
+    }
+
+    public static WfsPage<BuildingFeature> ParseBuildings(Stream gml, BuildingFeatureTypeOptions type) => ParseBuildings(XDocument.Load(gml), type);
+
+    /// <summary>
+    /// Buildings of the feature type <paramref name="type"/> describes. Only those naming an
+    /// address are kept (garages, sheds and building parts name none); ones without a polygon
+    /// are skipped too. <see cref="WfsPage{T}.MemberCount"/> still counts them all.
+    /// </summary>
+    public static WfsPage<BuildingFeature> ParseBuildings(XDocument doc, BuildingFeatureTypeOptions type)
+    {
+        var members = TopLevelMembers(doc);
+        var buildings = new List<BuildingFeature>();
+        foreach (var member in members)
+        {
+            var building = member.Elements().FirstOrDefault(e => e.Name.LocalName == type.LocalName);
+            if (building is null) continue;
+
+            var text = Field(building, type.LagebezeichnungField);
+            if (text is null) continue;
+
+            var geometry = ParseSurfaceGeometry(building);
+            if (geometry is null) continue;
+
+            buildings.Add(new BuildingFeature(geometry, text));
+        }
+        return new WfsPage<BuildingFeature>(buildings, members.Count, SrsNames(doc));
     }
 
     /// <summary>The text of a feature's child element; null if unnamed, absent or blank.</summary>
@@ -144,12 +177,13 @@ public static class WfsGmlParser
             .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>
-    /// A parcel's geometry: gml:Polygon (SH, BW, BB) or gml:Surface > gml:PolygonPatch (HH), and
-    /// for multi-part parcels (gml:MultiSurface) all of its parts, so an address in any part matches.
+    /// A parcel's or building's geometry: gml:Polygon (SH, BW, BB) or gml:Surface >
+    /// gml:PolygonPatch (HH), and for multi-part ones (gml:MultiSurface) all of their parts, so an
+    /// address in any part matches.
     /// </summary>
-    private static Geometry? ParseParcelGeometry(XElement parcel)
+    private static Geometry? ParseSurfaceGeometry(XElement feature)
     {
-        var polygons = parcel.Descendants()
+        var polygons = feature.Descendants()
             .Where(e => e.Name.LocalName is "Polygon" or "PolygonPatch")
             .Select(ParsePolygon)
             .OfType<Polygon>()

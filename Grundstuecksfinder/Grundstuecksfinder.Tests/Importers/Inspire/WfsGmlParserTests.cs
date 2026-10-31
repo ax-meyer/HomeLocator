@@ -81,6 +81,20 @@ public class WfsGmlParserTests
         page.MemberCount.Should().Be(3, "every member still counts towards a full page");
     }
 
+    [Fact]
+    public void ParseBuildings_KeepsThoseNamingAnAddress()
+    {
+        using var stream = OpenFixture("buildings_alkis_vereinfacht.gml");
+
+        var page = WfsGmlParser.ParseBuildings(stream, new BuildingFeatureTypeOptions());
+
+        page.MemberCount.Should().Be(3, "the building part naming nothing still counts towards a full page");
+        page.Features.Select(b => b.Lagebezeichnung).Should().Equal("Zanggasse 3, 5", "Hintere Bleiche 7");
+        page.Features[0].Geometry.Area.Should().Be(400);
+        page.Features[1].Geometry.Area.Should().Be(100, "a MultiSurface's polygon is the building");
+        page.SrsNames.Should().Equal("urn:ogc:def:crs:EPSG::25832");
+    }
+
     private static readonly Grundstuecksfinder.Services.Importers.Inspire.Addresses.AddressFieldOptions BremenFields = new()
     {
         Street = "stn", HouseNumber = "hnr", HouseNumberSuffix = "adz", Plz = "plz", Ort = "onm", Gemeinde = "onm",

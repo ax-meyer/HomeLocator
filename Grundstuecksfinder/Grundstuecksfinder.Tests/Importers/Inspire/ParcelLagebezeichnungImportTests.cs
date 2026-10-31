@@ -61,6 +61,23 @@ public sealed class ParcelLagebezeichnungImportTests
             postcodeAreas: postcodeAreas);
     }
 
+    private static InspireSourceOptions WithBuildings(Action<InspireSourceOptions>? tweak = null) =>
+        Options(o =>
+        {
+            o.BuildingFeatureType = new BuildingFeatureTypeOptions();
+            tweak?.Invoke(o);
+        });
+
+    private static (float Lat, float Lon) LatLon(double x, double y)
+    {
+        var (lon, lat) = new UtmToLonLat(25832).Transform(x, y);
+        return ((float)lat, (float)lon);
+    }
+
+    private static IEnumerable<Uri> BuildingRequests(FakeWfsServer server) =>
+        server.GetFeatureRequests(FakeWfsServer.ParcelUrl)
+            .Where(u => u.Query.Contains("GebaeudeBauwerk", StringComparison.Ordinal));
+
     private static FakeWfsServer Server(params FakeParcel[] parcels)
     {
         var server = new FakeWfsServer { AlkisVereinfacht = true };
@@ -121,6 +138,177 @@ public sealed class ParcelLagebezeichnungImportTests
         var rows = await FetchAllAsync(Importer(server, Options()));
 
         rows.Should().HaveCount(2).And.OnlyContain(r => r.Lat == null && r.Lon == null);
+    }
+
+    [Fact]
+    public async Task FetchAsync_ParcelWithSeveralAddresses_PinsEachAtItsBuilding()
+    {
+        var server = Server(Cell(0, 0, "Rheinstraße 105, 107"));
+        server.Buildings.Add(new FakeBuilding("B1", 1, 1, 4, 4, "Rheinstraße 105"));
+        server.Buildings.Add(new FakeBuilding("B2", 6, 6, 9, 9, "Rheinstraße 107"));
+        server.Buildings.Add(new FakeBuilding("Garage", 4, 0, 6, 2, null));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        rows.Select(r => (r.Hnr, r.Lat, r.Lon)).Should().Equal(
+            ("105", LatLon(2.5, 2.5).Lat, LatLon(2.5, 2.5).Lon),
+            ("107", LatLon(7.5, 7.5).Lat, LatLon(7.5, 7.5).Lon));
+    }
+
+    [Fact]
+    public async Task FetchAsync_BuildingNamingSeveralAddresses_PinsEachOfThem()
+    {
+        var server = Server(Cell(0, 0, "Zanggasse 3, 5"));
+        server.Buildings.Add(new FakeBuilding("B", 2, 2, 8, 8, "Zanggasse 3, 5"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        rows.Should().HaveCount(2).And.OnlyContain(r => r.Lat == LatLon(5, 5).Lat && r.Lon == LatLon(5, 5).Lon);
+    }
+
+    [Fact]
+    public async Task FetchAsync_BuildingOnTheNeighbouringParcel_IsTheAddressesPosition()
+    {
+        // A terrace over two parcels: the parcel names the address, the building stands next door.
+        var server = Server(Cell(0, 0, "Am Dom 1, 3"));
+        server.Buildings.Add(new FakeBuilding("B1", 2, 2, 8, 8, "Am Dom 1"));
+        server.Buildings.Add(new FakeBuilding("B3", 12, 2, 18, 8, "Am Dom 3"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        rows.Single(r => r.Hnr == "3").Lon.Should().Be(LatLon(15, 5).Lon);
+    }
+
+    [Fact]
+    public async Task FetchAsync_SeveralBuildingsNameTheAddress_TheNearestWins()
+    {
+        var server = Server(Cell(0, 0, "Am Dom 1, 3"));
+        server.Buildings.Add(new FakeBuilding("Far", 60, 2, 66, 8, "Am Dom 3"));
+        server.Buildings.Add(new FakeBuilding("Near", 12, 2, 18, 8, "Am Dom 3"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        rows.Single(r => r.Hnr == "3").Lon.Should().Be(LatLon(15, 5).Lon);
+    }
+
+    [Fact]
+    public async Task FetchAsync_BuildingFurtherThanTheLimit_IsNoPosition()
+    {
+        // Fetched (within 100 m of the parcel's envelope on each axis), but 127 m from its corner.
+        var server = Server(Cell(0, 0, "Am Dom 1, 3"));
+        server.Buildings.Add(new FakeBuilding("Far", 100, 100, 105, 105, "Am Dom 3"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        BuildingRequests(server).Should().NotBeEmpty();
+        rows.Should().OnlyContain(r => r.Lat == null && r.Lon == null);
+    }
+
+    [Fact]
+    public async Task FetchAsync_SuffixInAnotherCase_StillMatches()
+    {
+        var server = Server(Cell(0, 0, "Friedrich-Engels-Straße 34d, 35"));
+        server.Buildings.Add(new FakeBuilding("B", 2, 2, 8, 8, "Friedrich-Engels-Straße 34 D"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        var row = rows.Single(r => r.Hnr == "34");
+        row.HnrZus.Should().Be("d", "the row keeps the parcel's spelling");
+        row.Lon.Should().Be(LatLon(5, 5).Lon);
+    }
+
+    [Fact]
+    public async Task FetchAsync_OnlyParcelsWithOneAddress_FetchNoBuildings()
+    {
+        var server = Server(Cell(0, 0, "Steingasse 3"), Cell(3, 0, "Steingasse 5"));
+        server.Buildings.Add(new FakeBuilding("B", 1, 1, 4, 4, "Steingasse 3"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings()));
+
+        BuildingRequests(server).Should().BeEmpty();
+        rows.Single(r => r.Hnr == "3").Lon.Should().Be(LatLon(5, 5).Lon, "a single address stays at its parcel");
+    }
+
+    [Fact]
+    public async Task FetchAsync_BuildingsAreFetchedAroundTheParcelsThatNeedThem()
+    {
+        var server = Server(Cell(2, 3, "Am Dom 1, 3"), Cell(8, 8, "Steingasse 3"));
+
+        await FetchAllAsync(Importer(server, WithBuildings()));
+
+        // Cell (2,3) is (20,30)–(30,40); 100 m around it.
+        BuildingRequests(server).Should().ContainSingle()
+            .Which.Query.Should().Contain("bbox=-80,-70,130,140,");
+    }
+
+    [Fact]
+    public async Task FetchAsync_FullBuildingPage_IsSplit()
+    {
+        var server = Server(Cell(0, 0, "Weg 1, 2, 3, 4, 5, 6, 7, 8"));
+        for (var n = 1; n <= 8; n++)
+            server.Buildings.Add(new FakeBuilding($"B{n}", n, 1, n + 0.5, 2, $"Weg {n}"));
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings(o => o.PageSize = 5)));
+
+        rows.Should().HaveCount(8).And.OnlyContain(r => r.Lat != null);
+        BuildingRequests(server).Should().HaveCountGreaterThan(1);
+    }
+
+    [Fact]
+    public async Task FetchAsync_BuildingRequestsKeepFailing_ImportsTheRowsWithoutThosePositions()
+    {
+        var server = Server(Cell(0, 0, "Rheinstraße 105, 107"), Cell(3, 0, "Kaiserstraße 2"));
+        server.Buildings.Add(new FakeBuilding("B1", 1, 1, 4, 4, "Rheinstraße 105"));
+        server.Interceptor = (uri, _) => uri.Query.Contains("GebaeudeBauwerk", StringComparison.Ordinal) && uri.Query.Contains("bbox", StringComparison.Ordinal)
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : null;
+        var logger = new CapturingLogger<InspirePropertyImporter>();
+        var run = new ImportRunContext(1, "test");
+
+        var rows = await FetchAllAsync(Importer(server, WithBuildings(), logger: logger), run);
+
+        rows.Should().HaveCount(3);
+        rows.Where(r => r.Str == "Rheinstraße").Should().OnlyContain(r => r.Lat == null);
+        rows.Single(r => r.Str == "Kaiserstraße").Lat.Should().NotBeNull();
+        run.SkippedParts.Should().Be(0, "every parcel was imported");
+        logger.MessagesAt(LogLevel.Warning).Should().ContainMatch("*giving up on ave:GebaeudeBauwerk*");
+        logger.MessagesAt(LogLevel.Information).Should()
+            .ContainMatch("*positions: 1 at their parcel, 0 at their building, 2 without*1 tiles' buildings couldn't be fetched*");
+    }
+
+    [Fact]
+    public async Task FetchAsync_LogsWhereThePositionsCameFrom()
+    {
+        var server = Server(Cell(0, 0, "Rheinstraße 105, 107"), Cell(3, 0, "Kaiserstraße 2"));
+        server.Buildings.Add(new FakeBuilding("B1", 1, 1, 4, 4, "Rheinstraße 105"));
+        var logger = new CapturingLogger<InspirePropertyImporter>();
+
+        await FetchAllAsync(Importer(server, WithBuildings(), logger: logger));
+
+        logger.MessagesAt(LogLevel.Information).Should()
+            .ContainMatch("*positions: 1 at their parcel, 1 at their building, 1 without*0 tiles' buildings couldn't be fetched*");
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WithBuildings_MarksTheFingerprint()
+    {
+        var server = Server(Cell(0, 0, "Rheinstraße 1"), Cell(1, 0, null));
+
+        var probe = await Importer(server, WithBuildings()).ProbeAsync(TestContext.Current.CancellationToken);
+
+        probe.Fingerprint.Should().Be($"{InspireProbe.Revision}{InspireProbe.BuildingsMarker}:2");
+        BuildingRequests(server).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Requests_ForBuildings_BindTheirOwnNamespace()
+    {
+        var server = Server(Cell(0, 0, "Am Dom 1, 3"));
+
+        await FetchAllAsync(Importer(server, WithBuildings(o => o.BuildingFeatureType!.Namespace = AveNamespace)));
+
+        BuildingRequests(server).Should().ContainSingle()
+            .Which.Query.Should().Contain($"namespaces=xmlns(ave,{Uri.EscapeDataString(AveNamespace)})");
     }
 
     [Fact]

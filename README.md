@@ -248,6 +248,14 @@ two rows. Completeness is checked in parcels, the PLZ comes from the postcode ar
 parcel, and `Namespace` binds the type's prefix for servers that need a WFS `NAMESPACES`
 parameter (as does `AddressSource.Namespace` for a `FlatWfs` address type).
 
+A parcel naming one address pins it at the parcel's interior point. A parcel naming several
+would pin them all at one spot that is none of them, so `BuildingFeatureType` (defaults:
+`ave:GebaeudeBauwerk`, `lagebeztxt`) fetches the buildings of the same WFS, which name their
+addresses too: each address is pinned inside the nearest building naming it, up to 100 m from the
+parcel (a terrace over two parcels stands next door). Buildings are fetched only for tiles with
+such parcels, around them. Turning the option on or off changes the source's fingerprint, so it
+re-imports once.
+
 ```json
 {
   "Source": "rp",
@@ -258,6 +266,7 @@ parameter (as does `AddressSource.Namespace` for a `FlatWfs` address type).
     "GemeindeField": "gemeinde",
     "LagebezeichnungField": "lagebeztxt"
   },
+  "BuildingFeatureType": { "TypeName": "ave:GebaeudeBauwerk" },
   "AddressSource": { "Type": "ParcelLagebezeichnung" },
   "Crs": "urn:ogc:def:crs:EPSG::25832",
   "BoundingBox": { "MinX": 280000, "MinY": 5410000, "MaxX": 480000, "MaxY": 5660000 },
