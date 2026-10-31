@@ -2,6 +2,8 @@ using System.Text;
 using FluentAssertions;
 using Grundstuecksfinder.Services.Importers;
 using Grundstuecksfinder.Services.Importers.Nrw;
+using Grundstuecksfinder.Services.Importers.Postcodes;
+using NetTopologySuite.Geometries;
 using Xunit;
 
 namespace Grundstuecksfinder.Tests.Importers.Nrw;
@@ -22,7 +24,7 @@ public sealed class GebrefIndexTests
         var index = await LoadAsync(Line("Bochum", "Obertor", "50", "", 370279.838, 5705335.366));
 
         var (lon, lat) = new UtmToLonLat(25832).Transform(370279.838, 5705335.366);
-        index.Find("Bochum", "Obertor", "50", null).Should().Be(((float)lat, (float)lon));
+        index.Find("Bochum", "Obertor", "50", null).Should().Be(new GebrefMatch((float)lat, (float)lon, ByPostcode: false));
     }
 
     [Theory]
@@ -72,7 +74,7 @@ public sealed class GebrefIndexTests
     }
 
     [Fact]
-    public async Task Load_AddressAtTwoPlaces_IsDropped()
+    public async Task Find_AddressAtTwoPlaces_WithoutPostcode_IsNull()
     {
         // The same street name in two Ortsteile of one Gemeinde: no single answer.
         var index = await LoadAsync(
@@ -81,9 +83,57 @@ public sealed class GebrefIndexTests
             Line("Bochum", "Hauptstr.", "2", "", 370010, 5700000));
 
         index.Find("Bochum", "Hauptstraße", "1", null).Should().BeNull();
+        index.Find("Bochum", "Hauptstraße", "1", null, postcode: "44787").Should().BeNull("no postcodes were resolved");
         index.Find("Bochum", "Hauptstraße", "2", null).Should().NotBeNull();
         index.Ambiguous.Should().Be(1);
         index.Count.Should().Be(1);
+    }
+
+    /// <summary>Postcode areas split at x = 372,500: 44787 west of it, 44866 east.</summary>
+    private sealed class SplitAtX : IPostcodeLookup
+    {
+        public string? FindPostcode(Point location) => location.X < 372_500 ? "44787" : "44866";
+    }
+
+    [Fact]
+    public async Task Find_AddressAtTwoPlaces_TakesTheOneInTheRowsPostcode()
+    {
+        var index = await LoadAsync(
+            Line("Bochum", "Hauptstr.", "1", "", 370000, 5700000),
+            Line("Bochum", "Hauptstr.", "1", "", 375000, 5704000));
+
+        index.ResolvePostcodes(new SplitAtX()).Should().Be(1);
+
+        var (lon, lat) = new UtmToLonLat(25832).Transform(375000, 5704000);
+        index.Find("Bochum", "Hauptstraße", "1", null, postcode: "44866").Should().Be(new GebrefMatch((float)lat, (float)lon, ByPostcode: true));
+        index.Find("Bochum", "Hauptstraße", "1", null, postcode: "44787").Should().NotBeNull();
+        index.Find("Bochum", "Hauptstraße", "1", null, postcode: "44801").Should().BeNull("neither point lies in 44801");
+        index.Find("Bochum", "Hauptstraße", "1", null).Should().BeNull("a row without PLZ can't choose");
+    }
+
+    [Fact]
+    public async Task Find_SeveralPointsInTheRowsPostcode_IsNull()
+    {
+        // Three Kirchstraßen, two of them in one postcode area: the PLZ settles only the third.
+        var index = await LoadAsync(
+            Line("Duisburg", "Kirchstr.", "5", "", 370000, 5700000),
+            Line("Duisburg", "Kirchstr.", "5", "", 371000, 5701000),
+            Line("Duisburg", "Kirchstr.", "5", "", 375000, 5704000));
+
+        index.ResolvePostcodes(new SplitAtX()).Should().Be(1);
+
+        index.Find("Duisburg", "Kirchstraße", "5", null, postcode: "44787").Should().BeNull();
+        index.Find("Duisburg", "Kirchstraße", "5", null, postcode: "44866").Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Extent_CoversEveryAddress()
+    {
+        var index = await LoadAsync(
+            Line("Bochum", "Obertor", "50", "", 370000, 5700000),
+            Line("Bochum", "Obertor", "52", "", 375000, 5704000));
+
+        index.Extent.Should().Be(new Envelope(370000, 375000, 5700000, 5704000));
     }
 
     [Fact]
