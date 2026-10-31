@@ -29,7 +29,7 @@ storage, or search code required.
 
 Every source is official open data that also allows commercial use; the exact credits each
 licence asks for are on the app's Impressum page. Row counts and import times are from full
-local imports in September 2026.
+local imports in September 2026 (Saarland: October 2026).
 
 | State | Parcels (area) | Addresses | Licence | Rows | Import |
 |---|---|---|---|---:|---:|
@@ -42,7 +42,7 @@ local imports in September 2026.
 | Niedersachsen | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 2.64 M | 2 h 15 min |
 | Nordrhein-Westfalen | Grundsteuer bulk file | (same file); positions from the Gebäudereferenzen (GEBREF) file | dl-de/zero-2.0 | 3.95 M | 5 min |
 | Rheinland-Pfalz | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | dl-de/by-2.0 | 1.73 M | 1 h 40 min |
-| Saarland | INSPIRE WFS | Hauskoordinaten OGC API | dl-de/by-2.0, CC BY 4.0 | 0.34 M | 8 min |
+| Saarland | INSPIRE WFS | Hauskoordinaten WFS | dl-de/by-2.0, CC BY 4.0 | 0.34 M | 25 min |
 | Sachsen | INSPIRE WFS | INSPIRE WFS | dl-de/by-2.0 | 0.99 M | 50 min |
 | Schleswig-Holstein | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 0.95 M | 50 min |
 | Thüringen | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | CC BY 4.0 | 0.69 M | 3 h 45 min |
@@ -178,9 +178,9 @@ address matched to the parcel containing it. `AddressSource.Type` picks it:
 |---|---|---|
 | `InspireWfs` | the INSPIRE `ad:Address` WFS, per tile alongside the parcels | SH, SN, BB, NI |
 | `InspireWfsStartIndex` | the same, paged once by `startIndex` (its bbox filter is broken) | HH |
-| `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | SL |
+| `OgcApiFeatures` | an OGC API Features collection with the ALKIS Hauskoordinaten schema | — |
 | `HkFile` | the statewide "Hauskoordinaten" text file (ZSHH format) in a ZIP | BW, HE |
-| `FlatWfs` | a WFS with flat address features (`TypeName`, `Fields` map the elements) | HB, BE |
+| `FlatWfs` | a WFS with flat address features (`TypeName`, `Fields` map the elements) | HB, BE, SL |
 | `ParcelLagebezeichnung` | no join: the parcels' own Lagebezeichnung text (see below) | RP, TH |
 
 ```json

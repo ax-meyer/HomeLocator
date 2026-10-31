@@ -30,7 +30,7 @@ public sealed class InspireSourcesConfigTests
     [InlineData("ni", AddressSourceType.InspireWfs)]
     [InlineData("hh", AddressSourceType.InspireWfsStartIndex)]
     [InlineData("he", AddressSourceType.HkFile)]
-    [InlineData("sl", AddressSourceType.OgcApiFeatures)]
+    [InlineData("sl", AddressSourceType.FlatWfs)]
     [InlineData("rp", AddressSourceType.ParcelLagebezeichnung)]
     [InlineData("th", AddressSourceType.ParcelLagebezeichnung)]
     [InlineData("hb", AddressSourceType.FlatWfs)]
@@ -60,9 +60,25 @@ public sealed class InspireSourcesConfigTests
         he.FillMissingPlzFromPostcodeAreas.Should().BeTrue("the file has no postal columns at all");
     }
 
+    /// <summary>
+    /// Saarland's native ALKIS Hauskoordinaten WFS: flat features with their PLZ, joined to the
+    /// INSPIRE parcels. ONM is the Gemeinde; the data has no separate Ortsteil level.
+    /// </summary>
     [Fact]
-    public void ShippedSources_SaarlandKeepsItsOgcApiPageSize() =>
-        ShippedSources().Single(s => s.Source == "sl").AddressSource.OgcApiPageSize.Should().Be(2500);
+    public void ShippedSources_SaarlandJoinsItsHauskoordinatenWfsToTheInspireParcels()
+    {
+        var sl = ShippedSources().Single(s => s.Source == "sl");
+
+        sl.ParcelFeatureType.TypeName.Should().Be("cp:CadastralParcel");
+        sl.AddressSource.Url.Should().Be("https://geoportal.saarland.de/registry/wfs/416");
+        sl.AddressSource.TypeName.Should().Be("GDI_ALKIS_Gebaeude:Hauskoordinaten");
+        sl.AddressSource.Namespace.Should().BeNull("the server resolves the prefix on its own");
+        sl.AddressSource.Fields.Should().BeEquivalentTo(new AddressFieldOptions
+        {
+            Street = "STN", HouseNumber = "HNR", HouseNumberSuffix = "ADZ", Plz = "PLZ", Ort = "ONM", Gemeinde = "ONM",
+        });
+        sl.FillMissingPlzFromPostcodeAreas.Should().BeFalse("every address carries its PLZ");
+    }
 
     [Fact]
     public void ShippedSources_InspireSourcesKeepTheCadastralParcelDefaults() =>

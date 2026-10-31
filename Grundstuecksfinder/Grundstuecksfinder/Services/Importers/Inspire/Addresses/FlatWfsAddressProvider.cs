@@ -7,7 +7,7 @@ namespace Grundstuecksfinder.Services.Importers.Inspire.Addresses;
 /// Addresses from a WFS whose features are flat — one element per field, a point geometry —
 /// fetched per tile right after the tile's parcels (<see cref="AddressSourceType.FlatWfs"/>):
 /// for states whose address dataset isn't INSPIRE ad:Address but carries what the import
-/// needs, PLZ included (Bremen's native ALKIS Gebäudeadressen).
+/// needs, PLZ included (Bremen's native ALKIS Gebäudeadressen, Saarland's ALKIS Hauskoordinaten).
 /// </summary>
 public sealed class FlatWfsAddressProvider(
     WfsFeatureType wfs,
