@@ -145,8 +145,9 @@ public sealed partial class ParcelLagebezeichnungImport(
         LogFetchSummary(logger, Source, parcelCount, expected, completeness, addressedParcels, rowCount, unreadParts, failedTiles.Count);
         if (postcodes is not null)
             LogPlzSummary(logger, Source, plzFilled, rowCount);
+        var withoutShare = rowCount == 0 ? 0 : (double)pinned[(int)PinnedAt.None] / rowCount;
         LogPositions(logger, Source, pinned[(int)PinnedAt.Parcel], pinned[(int)PinnedAt.Building], pinned[(int)PinnedAt.None],
-            Share(pinned[(int)PinnedAt.None], rowCount), buildingAreasFailed);
+            withoutShare, buildingAreasFailed);
 
         if (completeness < options.MinCompleteness)
             throw new InspireImportException(FormattableString.Invariant(
@@ -163,8 +164,6 @@ public sealed partial class ParcelLagebezeichnungImport(
 
     /// <summary>Where a row's position came from.</summary>
     private enum PinnedAt { Parcel, Building, None }
-
-    private static double Share(long part, long whole) => whole == 0 ? 0 : (double)part / whole;
 
     /// <summary>
     /// The area to fetch buildings for: around every given parcel, as far as
