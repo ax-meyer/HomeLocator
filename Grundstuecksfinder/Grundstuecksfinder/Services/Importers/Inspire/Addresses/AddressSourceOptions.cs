@@ -9,7 +9,10 @@ public enum AddressSourceType
     /// <summary>The state's INSPIRE ad:Address WFS, paged by startIndex in one pass (Hamburg).</summary>
     InspireWfsStartIndex,
 
-    /// <summary>An OGC API Features "items" endpoint with the ALKIS Hauskoordinaten schema (Saarland).</summary>
+    /// <summary>
+    /// An OGC API Features "items" endpoint with the ALKIS Hauskoordinaten schema. Saarland's,
+    /// until that endpoint broke in October 2026; no shipped source uses it now.
+    /// </summary>
     OgcApiFeatures,
 
     /// <summary>A statewide Hauskoordinaten text file in a ZIP (Baden-Württemberg, Hessen).</summary>
@@ -17,8 +20,8 @@ public enum AddressSourceType
 
     /// <summary>
     /// A WFS whose address features are flat — one child element per field and a point
-    /// geometry, e.g. Bremen's native ALKIS Gebäudeadressen — fetched per tile like
-    /// <see cref="InspireWfs"/>. Needs <see cref="AddressSourceOptions.TypeName"/> and
+    /// geometry, e.g. Bremen's native ALKIS Gebäudeadressen or Saarland's Hauskoordinaten —
+    /// fetched per tile like <see cref="InspireWfs"/>. Needs <see cref="AddressSourceOptions.TypeName"/> and
     /// <see cref="AddressSourceOptions.Fields"/>.
     /// </summary>
     FlatWfs,
