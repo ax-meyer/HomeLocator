@@ -222,7 +222,8 @@ public partial class NrwPropertyImporter(
         try
         {
             var postcodes = await postcodeAreas.LoadAsync(25832, gebref.Extent, ct);
-            LogPostcodesResolved(logger, gebref.ResolvePostcodes(postcodes), gebref.Ambiguous);
+            var resolvable = gebref.ResolvePostcodes(postcodes);
+            LogPostcodesResolved(logger, resolvable, gebref.Ambiguous);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
