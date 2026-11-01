@@ -41,11 +41,11 @@ local imports in September 2026 (Saarland: October 2026).
 | Hessen | INSPIRE WFS | Hauskoordinaten file | dl-de/zero-2.0 | 1.63 M | 2 h 25 min |
 | Niedersachsen | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 2.64 M | 2 h 15 min |
 | Nordrhein-Westfalen | Grundsteuer bulk file | (same file); positions from the Gebäudereferenzen (GEBREF) file | dl-de/zero-2.0 | 3.95 M | 5 min |
-| Rheinland-Pfalz | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | dl-de/by-2.0 | 1.73 M | 1 h 40 min |
+| Rheinland-Pfalz | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung; positions from the parcels and buildings | dl-de/by-2.0 | 1.73 M | 1 h 45 min |
 | Saarland | INSPIRE WFS | Hauskoordinaten WFS | dl-de/by-2.0, CC BY 4.0 | 0.34 M | 25 min |
 | Sachsen | INSPIRE WFS | INSPIRE WFS | dl-de/by-2.0 | 0.99 M | 50 min |
 | Schleswig-Holstein | INSPIRE WFS | INSPIRE WFS | CC BY 4.0 | 0.95 M | 50 min |
-| Thüringen | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung | CC BY 4.0 | 0.69 M | 3 h 45 min |
+| Thüringen | ALKIS-vereinfacht WFS | the parcels' Lagebezeichnung; positions from the parcels and buildings | CC BY 4.0 | 0.69 M | 2 h 40 min |
 
 Where a state publishes no PLZ (BB, BW, HE, NI, RP, TH), it is filled from the OpenStreetMap
 postcode areas ([yetzt/postleitzahlen](https://github.com/yetzt/postleitzahlen), ODbL 1.0).
@@ -254,7 +254,9 @@ would pin them all at one spot that is none of them, so `BuildingFeatureType` (d
 addresses too: each address is pinned inside the nearest building naming it, up to 100 m from the
 parcel (a terrace over two parcels stands next door). Buildings are fetched only for tiles with
 such parcels, around them. Turning the option on or off changes the source's fingerprint, so it
-re-imports once.
+re-imports once. In the 2026-11 imports this left 0.76 % of Rheinland-Pfalz's addresses
+(13,059 of 1.73 M) and 0.20 % of Thüringen's (1,362 of 0.69 M) without a position, down from
+about 11 % each. The building requests didn't make either import noticeably slower.
 
 ```json
 {
