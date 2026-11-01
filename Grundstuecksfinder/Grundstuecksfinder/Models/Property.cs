@@ -11,8 +11,8 @@ public class Property
     public string? Gemeinde { get; set; }
     public double? FlaecheAmtl { get; set; }
 
-    // WGS84 position of the address from the source itself (the official house coordinate), so
-    // the map pin needs no geocoding; null where the source has none (NRW). real, not double:
+    // WGS84 position of the address from the source itself: the official house coordinate, or
+    // the parcel or building naming it (RP, TH); null where none is known. real, not double:
     // ~0.5 m is plenty for a pin and halves the size over millions of rows.
     public float? Lat { get; set; }
     public float? Lon { get; set; }

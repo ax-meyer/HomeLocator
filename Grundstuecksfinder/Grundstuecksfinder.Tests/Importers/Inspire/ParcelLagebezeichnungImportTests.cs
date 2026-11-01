@@ -131,7 +131,7 @@ public sealed class ParcelLagebezeichnungImportTests
     }
 
     [Fact]
-    public async Task FetchAsync_ParcelWithSeveralAddresses_LeavesThemToGeocoding()
+    public async Task FetchAsync_ParcelWithSeveralAddresses_WithoutBuildings_HasNoPosition()
     {
         var server = Server(Cell(0, 0, "Vordere Synagogenstraße 2, 2 A"));
 

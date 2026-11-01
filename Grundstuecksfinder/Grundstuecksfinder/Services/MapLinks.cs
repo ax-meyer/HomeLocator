@@ -4,7 +4,7 @@ namespace Grundstuecksfinder.Services;
 
 /// <summary>
 /// The outgoing map links of a result card. Coordinates are WGS84; default((double,double))
-/// means none are known (yet), in which case each link falls back to what works without them.
+/// means the row has none, in which case each link falls back to what works without them.
 /// </summary>
 /// <remarks>Coordinates go through FormattableString.Invariant: a German server culture would write commas.</remarks>
 public static class MapLinks
@@ -15,6 +15,14 @@ public static class MapLinks
         "https://www.giscloud.nrw.de/arcgis/apps/experiencebuilder/experience/?id=222e772d0d4543819ddaae90346e2c51";
 
     /// <summary>
+    /// The row's own position (the official one from the source), rounded to six decimals —
+    /// about 10 cm — so a link shows 52.530113 rather than the float's 52.530113220214844;
+    /// default where the source has none.
+    /// </summary>
+    public static (double Lat, double Lon) Coordinates(Property property) =>
+        property is { Lat: { } lat, Lon: { } lon } ? (Math.Round((double)lat, 6), Math.Round((double)lon, 6)) : default;
+
+    /// <summary>
     /// Always a search for the address: Google finds even houses OSM doesn't know (within ~10 m
     /// in Berlin's courtyards) and then shows the address and its place card, where a pin at bare
     /// coordinates would only show "52°31'48.2"N 13°23'52.9"E".
@@ -23,8 +31,8 @@ public static class MapLinks
         $"https://www.google.com/maps/search/{AddressQuery(property)}";
 
     /// <summary>
-    /// A marker at the coordinates where known: OSM's own search is Nominatim, which only lists
-    /// the street when OSM lacks the house number.
+    /// A marker at the coordinates where known; otherwise OSM's own address search, which only
+    /// lists the street when OSM lacks the house number.
     /// </summary>
     public static string Osm(Property property, (double Lat, double Lon) coords) => coords != default
         ? FormattableString.Invariant($"https://www.openstreetmap.org/?mlat={coords.Lat}&mlon={coords.Lon}&zoom=17")

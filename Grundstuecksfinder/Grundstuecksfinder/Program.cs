@@ -121,8 +121,6 @@ builder.Services.AddRazorComponents()
 
 builder.Services.AddMemoryCache();
 
-builder.Services.AddNominatim(builder.Configuration);
-
 builder.Services.AddScoped<PropertyService>();
 builder.Services.AddScoped<FilterOptionsService>();
 
