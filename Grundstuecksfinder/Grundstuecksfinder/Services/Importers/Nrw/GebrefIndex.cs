@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Grundstuecksfinder.Services.Importers.Postcodes;
+using NetTopologySuite.Geometries;
 
 namespace Grundstuecksfinder.Services.Importers.Nrw;
 
@@ -18,12 +20,16 @@ namespace Grundstuecksfinder.Services.Importers.Nrw;
 /// </para>
 /// <para>
 /// Only a 64-bit hash of each key is kept with its point (~30 B per address instead of the
-/// strings' few hundred). A key found at two different points (the same street name in two
-/// Ortsteile of one Gemeinde) has no single answer and is dropped.
+/// strings' few hundred). A key found at two or more different points is the same street name in
+/// several Ortsteile of one Gemeinde: ~6,000 addresses, 86 % of them in Duisburg, which has 289
+/// street names belonging to several streets. Their points are kept as candidates, and
+/// <see cref="ResolvePostcodes"/> lets <see cref="Find"/> pick the one in the row's PLZ.
 /// </para>
 /// </remarks>
 public sealed class GebrefIndex
 {
+    private const int UtmEpsg = 25832;
+
     private const int GemeindeField = 10;
     private const int StreetField = 14;
     private const int HouseNumberField = 15;
@@ -33,36 +39,42 @@ public sealed class GebrefIndex
     private const int NorthField = 19;
     private const int MinFields = 20;
 
-    // Points closer than this (~1 m) are one point: the same address listed twice for one building.
+    // Points closer than this (~1 m) are one point: see SamePoint.
     private const float SamePointDegrees = 1e-5f;
 
     // "str." ending a word: "Schlaraffiastr.", "Öckendorfer Str.".
     private static readonly Regex StreetAbbreviation = new(@"str\.(?=\s|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly Dictionary<ulong, (float Lat, float Lon)> _points;
+    private readonly Dictionary<ulong, Candidate[]> _candidates;
 
-    private GebrefIndex(Dictionary<ulong, (float Lat, float Lon)> points, int ambiguous, int skipped)
+    private GebrefIndex(Dictionary<ulong, (float Lat, float Lon)> points, Dictionary<ulong, Candidate[]> candidates, int skipped, Envelope extent)
     {
         _points = points;
-        Ambiguous = ambiguous;
+        _candidates = candidates;
         Skipped = skipped;
+        Extent = extent;
     }
 
     /// <summary>Addresses with exactly one point.</summary>
     public int Count => _points.Count;
 
-    /// <summary>Addresses dropped because GEBREF lists them at two or more different points.</summary>
-    public int Ambiguous { get; }
+    /// <summary>Addresses GEBREF lists at two or more different points; only their PLZ tells them apart.</summary>
+    public int Ambiguous => _candidates.Count;
 
     /// <summary>Lines that weren't an address in EPSG 25832 (malformed, or another zone).</summary>
     public int Skipped { get; }
+
+    /// <summary>The addresses' extent in EPSG 25832: where postcode areas are needed.</summary>
+    public Envelope Extent { get; }
 
     /// <summary>Reads GEBREF's text file; fails if fewer than half its lines are usable addresses.</summary>
     public static async Task<GebrefIndex> LoadAsync(Stream gebrefTxt, CancellationToken ct)
     {
         var toLonLat = new UtmToLonLat(25832);
         var points = new Dictionary<ulong, (float Lat, float Lon)>(capacity: 5_000_000);
-        var ambiguous = new HashSet<ulong>();
+        var several = new Dictionary<ulong, List<(float Lat, float Lon)>>();
+        var extent = new Envelope();
         var lines = 0;
         var skipped = 0;
 
@@ -80,14 +92,19 @@ public sealed class GebrefIndex
                 continue;
             }
 
+            extent.ExpandToInclude(east, north);
             var key = Key(fields[GemeindeField], fields[StreetField], fields[HouseNumberField], fields[SuffixField]);
             var (lon, lat) = toLonLat.Transform(east, north);
             (float Lat, float Lon) point = ((float)lat, (float)lon);
-            if (!points.TryAdd(key, point))
+            if (points.TryAdd(key, point)) continue;
+
+            if (several.TryGetValue(key, out var known))
             {
-                var first = points[key];
-                if (Math.Abs(first.Lat - point.Lat) + Math.Abs(first.Lon - point.Lon) > SamePointDegrees)
-                    ambiguous.Add(key);
+                if (known.TrueForAll(p => !SamePoint(p, point))) known.Add(point);
+            }
+            else if (!SamePoint(points[key], point))
+            {
+                several.Add(key, [points[key], point]);
             }
         }
 
@@ -95,15 +112,69 @@ public sealed class GebrefIndex
         if (lines == 0 || skipped > lines / 2)
             throw new InvalidDataException($"GEBREF: only {lines - skipped} of {lines} lines are addresses in EPSG 25832; has the format changed?");
 
-        foreach (var key in ambiguous)
+        foreach (var key in several.Keys)
             points.Remove(key);
         points.TrimExcess();
-        return new GebrefIndex(points, ambiguous.Count, skipped);
+        var candidates = several.ToDictionary(e => e.Key, e => e.Value.Select(p => new Candidate(p.Lat, p.Lon)).ToArray());
+        return new GebrefIndex(points, candidates, skipped, extent);
     }
 
-    /// <summary>The address's point, or null where GEBREF has none or several.</summary>
-    public (float Lat, float Lon)? Find(string? gemeinde, string? street, string? houseNumber, string? suffix) =>
-        _points.TryGetValue(Key(gemeinde, street, houseNumber, suffix), out var point) ? point : null;
+    // Points closer than ~1 m are one point: the same address listed twice for one building.
+    private static bool SamePoint((float Lat, float Lon) a, (float Lat, float Lon) b) =>
+        Math.Abs(a.Lat - b.Lat) + Math.Abs(a.Lon - b.Lon) <= SamePointDegrees;
+
+    /// <summary>
+    /// Gives every candidate point of an <see cref="Ambiguous"/> address the postcode of the area
+    /// it lies in; returns how many addresses that makes unique for at least one PLZ.
+    /// </summary>
+    /// <param name="postcodes">Postcode areas in EPSG 25832.</param>
+    public int ResolvePostcodes(IPostcodeLookup postcodes)
+    {
+        var toUtm = new UtmToLonLat(UtmEpsg);
+        var resolvable = 0;
+        foreach (var candidates in _candidates.Values)
+        {
+            foreach (var candidate in candidates)
+            {
+                var (x, y) = toUtm.ToUtm(candidate.Lon, candidate.Lat);
+                candidate.Postcode = postcodes.FindPostcode(new Point(x, y));
+            }
+            if (candidates.Any(c => c.Postcode is not null && candidates.Count(o => o.Postcode == c.Postcode) == 1))
+                resolvable++;
+        }
+        return resolvable;
+    }
+
+    /// <summary>
+    /// The address's point, or null where GEBREF has none. Where it has several, the one in
+    /// <paramref name="postcode"/>'s area (once <see cref="ResolvePostcodes"/> ran), or null when
+    /// none or several lie there.
+    /// </summary>
+    public GebrefMatch? Find(string? gemeinde, string? street, string? houseNumber, string? suffix, string? postcode = null)
+    {
+        var key = Key(gemeinde, street, houseNumber, suffix);
+        if (_points.TryGetValue(key, out var point))
+            return new GebrefMatch(point.Lat, point.Lon, ByPostcode: false);
+        if (postcode is null || !_candidates.TryGetValue(key, out var candidates))
+            return null;
+
+        Candidate? hit = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Postcode != postcode) continue;
+            if (hit is not null) return null;
+            hit = candidate;
+        }
+        return hit is null ? null : new GebrefMatch(hit.Lat, hit.Lon, ByPostcode: true);
+    }
+
+    /// <summary>One of an ambiguous address's points; the postcode is filled in by <see cref="ResolvePostcodes"/>.</summary>
+    private sealed class Candidate(float lat, float lon)
+    {
+        public float Lat { get; } = lat;
+        public float Lon { get; } = lon;
+        public string? Postcode { get; set; }
+    }
 
     /// <summary>
     /// The hash both sides are compared by. GEBREF abbreviates a tenth of its street names
@@ -161,3 +232,9 @@ public sealed class GebrefIndex
         }
     }
 }
+
+/// <summary>
+/// A GEBREF point in WGS84; <paramref name="ByPostcode"/> when the address is listed at several
+/// and the row's PLZ picked this one.
+/// </summary>
+public readonly record struct GebrefMatch(float Lat, float Lon, bool ByPostcode);

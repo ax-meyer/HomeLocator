@@ -50,6 +50,13 @@ local imports in September 2026 (Saarland: October 2026).
 Where a state publishes no PLZ (BB, BW, HE, NI, RP, TH), it is filled from the OpenStreetMap
 postcode areas ([yetzt/postleitzahlen](https://github.com/yetzt/postleitzahlen), ODbL 1.0).
 
+NRW's Grundsteuer file has no coordinates, so each row is looked up by address in GEBREF.
+Where the file gives the street or house number as "uneindeutig" (a parcel with several
+addresses, ~183,000 rows), the row takes the first address in the parcel's Lagebezeichnung
+(`lagebeztext`) that GEBREF knows. GEBREF has no PLZ and lists ~6,000 addresses at several
+points, mostly Duisburg street names used in several Ortsteile; there the postcode area around
+each point picks the one in the row's PLZ. 99.9 % of NRW's rows get a position this way.
+
 Not covered, for licence reasons:
 
 - **Sachsen-Anhalt** — its ALKIS "OpenData" WFS would work like Rheinland-Pfalz's, but the

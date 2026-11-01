@@ -10,11 +10,15 @@ public static class DelimitedPropertyParser
     private static readonly Regex PlzPattern = new(@"^\d{5}$", RegexOptions.Compiled);
     private static readonly Regex GemeindePattern = new(@"^\p{L}", RegexOptions.Compiled);
 
-    public static Property? ParseLine(string line, CsvColumnMap map)
-    {
-        if (string.IsNullOrWhiteSpace(line)) return null;
+    public static Property? ParseLine(string line, CsvColumnMap map) =>
+        string.IsNullOrWhiteSpace(line) ? null : ParseFields(SplitCsvLine(line, map.Delimiter), map);
 
-        var parts = SplitCsvLine(line, map.Delimiter);
+    /// <summary>
+    /// Like <see cref="ParseLine"/>, for a line already split with <see cref="SplitCsvLine"/>,
+    /// so a caller that also needs a column the map doesn't cover splits the line only once.
+    /// </summary>
+    public static Property? ParseFields(IReadOnlyList<string> parts, CsvColumnMap map)
+    {
         if (parts.Count < map.MinColumnCount) return null;
 
         var str = NullIfEmpty(parts[map.StrIndex], map.NullToken);
@@ -106,6 +110,10 @@ public static class DelimitedPropertyParser
         }
         return fields;
     }
+
+    /// <summary>The field at <paramref name="index"/>, or null where it is empty, the null token or missing.</summary>
+    public static string? Field(IReadOnlyList<string> parts, int index, string nullToken) =>
+        index < parts.Count ? NullIfEmpty(parts[index], nullToken) : null;
 
     private static string? NullIfEmpty(string s, string nullToken) =>
         string.IsNullOrWhiteSpace(s) || s.Equals(nullToken, StringComparison.OrdinalIgnoreCase) ? null : s.Trim();

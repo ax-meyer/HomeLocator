@@ -23,6 +23,18 @@ public sealed class UtmToLonLatTests
         lat.Should().BeApproximately(Lat, 1e-6);
     }
 
+    [Fact]
+    public void ToUtm_IsTheWayBack()
+    {
+        var utm = new UtmToLonLat(25832);
+        var (lon, lat) = utm.Transform(341936.846, 5712892.794);
+
+        var (x, y) = utm.ToUtm(lon, lat);
+
+        x.Should().BeApproximately(341936.846, 0.001);
+        y.Should().BeApproximately(5712892.794, 0.001);
+    }
+
     [Theory]
     [InlineData(25830)]
     [InlineData(25834)]
