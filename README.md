@@ -3,7 +3,8 @@
 Grundstücksfinder is a self-hosted search tool for German real-estate parcels. It imports
 the official cadastral open data (ALKIS) the German states publish, stores it in Postgres, and
 lets you search parcels by postal code, municipality, and area (m²) through a Blazor Server
-web UI — with geocoded map markers via OpenStreetMap/Nominatim.
+web UI — with links to Google Maps, OpenStreetMap and the states' map services, pinned at the
+official position of the address where the state publishes one.
 
 Currently ships with sources for **13 of the 16 Bundesländer** (~17.8 million addresses, see
 [Data sources](#data-sources)): North Rhine-Westphalia from its Grundsteuer bulk file, all
@@ -19,7 +20,8 @@ storage, or search code required.
 ## Features
 
 - Search parcels by PLZ, Gemeinde, and min/max area
-- Map view with geocoded markers (Nominatim, cached to respect its usage policy)
+- Map links pinned at the address's official position: the state's house coordinate, or the
+  parcel or building naming it; the few rows without one link to an address search instead
 - Automatic imports of new open-data releases, planned per source (see [Import schedule](#import-schedule))
 - Multiple data sources can coexist without one import wiping another's rows
 - Import history (`ImportRuns`) and per-source state (`SourceStates`) in the database; failed

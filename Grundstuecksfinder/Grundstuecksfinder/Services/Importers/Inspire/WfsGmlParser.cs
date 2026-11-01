@@ -241,7 +241,7 @@ public static class WfsGmlParser
 
         // German AGS codes nest by length: 2=Land, 3=Regierungsbezirk, 5=Kreis, 8=Gemeinde,
         // >8=Ortsteil. Gemeinde is the Gemeinde-level unit only — never a Kreis or the Land.
-        // Ort prefers an Ortsteil, then the postal town name (what addresses and Nominatim
+        // Ort prefers an Ortsteil, then the postal town name (what addresses and map searches
         // use), then the Gemeinde.
         var gemeindeUnit = adminUnits.Where(u => u.AgsLength == 8).Select(u => u.Name).FirstOrDefault();
         var ortsteil = adminUnits.Where(u => u.AgsLength > 8).OrderByDescending(u => u.AgsLength)

@@ -9,8 +9,7 @@ public static class OutboundHttp
     /// <summary>
     /// Sent on every outbound request. One import is tens of thousands of requests against a
     /// public download service; naming the client and a contact address lets an operator ask us
-    /// to slow down or stop instead of only being able to block the address. Nominatim's usage
-    /// policy requires it outright, and the state download services are no less entitled to it.
+    /// to slow down or stop instead of only being able to block the address.
     /// </summary>
     public const string UserAgent = "Grundstuecksfinder/1.0 (+https://grundstuecksfinder.meyerweb.eu; grundstuecksfinder-impressum@meyerweb.eu)";
 

@@ -2,7 +2,6 @@
 @inject PropertyService PropertyService
 @inject SearchThrottle SearchThrottle
 @inject FilterOptionsService FilterOptionsService
-@inject GeocodingService GeocodingService
 @inject AppMetrics AppMetrics
 @inject SupportedStates SupportedStates
 @using System.Globalization
@@ -103,7 +102,7 @@ else
                         </button>
                         @if (open)
                         {
-                            <PropertyDetail Property="property" Coords="_coords.GetValueOrDefault(property.Id)" />
+                            <PropertyDetail Property="property" />
                         }
                     </div>
                 </Template>
@@ -146,9 +145,6 @@ else if (_searchError is null)
     private DateTimeOffset _lastSearchAt = DateTimeOffset.MinValue;
 
     private IReadOnlyList<SearchLocation> _locationOptions = [];
-
-    // propertyId → (lat, lon)
-    private readonly Dictionary<int, (double Lat, double Lon)> _coords = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -208,7 +204,6 @@ else if (_searchError is null)
 
                 _searchRequested = false;
                 _searchError = null;
-                _coords.Clear();
                 _openCards.Clear();
                 AppMetrics.RecordSearch();
                 _properties = await SearchThrottle.SearchAsync(_location.Gemeinde, _location.Plz, _minFlaeche, _maxFlaeche, MaxResults);
@@ -237,7 +232,7 @@ else if (_searchError is null)
         return string.IsNullOrWhiteSpace(p.Gemeinde) || p.Gemeinde == p.Ort ? place : $"{place} · {p.Gemeinde}";
     }
 
-    private async Task ToggleCard(Property property)
+    private void ToggleCard(Property property)
     {
         if (!_openCards.Add(property.Id))
         {
@@ -246,19 +241,5 @@ else if (_searchError is null)
         }
 
         AppMetrics.RecordTableRowOpen();
-        if (_coords.ContainsKey(property.Id)) return;
-        // The source's own point where it has one: the official house coordinate, no geocoding.
-        // Rounded, so the links show 52.530113 rather than the float's 52.530113220214844.
-        if (property is { Lat: { } lat, Lon: { } lon })
-        {
-            _coords[property.Id] = (Math.Round((double)lat, 6), Math.Round((double)lon, 6));
-            return;
-        }
-        var coords = await GeocodingService.GeocodeAsync(property);
-        if (coords.HasValue)
-        {
-            _coords[property.Id] = coords.Value;
-            StateHasChanged();
-        }
     }
 }

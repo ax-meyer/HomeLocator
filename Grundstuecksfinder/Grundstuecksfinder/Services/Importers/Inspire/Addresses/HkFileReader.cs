@@ -28,7 +28,7 @@ public sealed record HkReadResult(long Rows, long Accepted, long OtherQuality, l
 /// exists and holds a PLZ, Ort = ott (the Ortsteil) if given, else gmd, Gemeinde = gmd — place
 /// names run through <see cref="PlaceNameNormalizer"/> like every other source's. An ott that
 /// only numbers a city district ("Frankfurt Bezirk 32") counts as not given: it is no place
-/// name anyone uses, and Nominatim knows none of them.
+/// name anyone uses, and map searches know none of them.
 /// </para>
 /// <para>
 /// ~3.4 M rows for BW: each row's fields are only looked at as spans, and every text value is

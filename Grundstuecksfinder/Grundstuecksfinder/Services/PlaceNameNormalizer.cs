@@ -4,8 +4,7 @@ namespace Grundstuecksfinder.Services;
 
 /// <summary>
 /// Cleans up official ALKIS/INSPIRE place and street names into the plain form people (and
-/// Nominatim) use. Applied at import time and again before geocoding, so rows imported before
-/// these rules existed still produce working map links.
+/// map searches) use. Applied at import time, so map links built from the names work.
 /// </summary>
 public static partial class PlaceNameNormalizer
 {

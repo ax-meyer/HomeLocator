@@ -31,6 +31,14 @@ public sealed class MapLinksTests
     }
 
     [Fact]
+    public void Coordinates_AreTheRowsOwn_RoundedToSixDecimals() =>
+        MapLinks.Coordinates(new Property { Lat = 52.530113f, Lon = 13.395007f }).Should().Be((52.530113, 13.395007));
+
+    [Fact]
+    public void Coordinates_WithoutAPosition_AreDefault() =>
+        MapLinks.Coordinates(new Property { Lat = 52.53f }).Should().Be(default((double, double)));
+
+    [Fact]
     public void Osm_WithCoordinates_SetsAMarker() =>
         MapLinks.Osm(Berlin, Pin).Should().Be("https://www.openstreetmap.org/?mlat=52.531174&mlon=13.395007&zoom=17");
 
