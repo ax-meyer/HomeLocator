@@ -56,7 +56,8 @@ if (nrwEnabled)
         sp.GetRequiredService<IHttpClientFactory>(),
         sp.GetRequiredService<IOptions<NrwImporterOptions>>(),
         sp.GetRequiredService<TimeProvider>(),
-        workDirectory: importWorkDirectory));
+        workDirectory: importWorkDirectory,
+        postcodeAreas: sp.GetRequiredService<IPostcodeAreaProvider>()));
 }
 
 // One IPropertySource per configured INSPIRE-split Bundesland (e.g. Schleswig-Holstein) –

@@ -2,6 +2,8 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using Grundstuecksfinder.Models;
+using Grundstuecksfinder.Services.Importers.Inspire;
+using Grundstuecksfinder.Services.Importers.Postcodes;
 using Grundstuecksfinder.Services.Importers.Scheduling;
 using Microsoft.Extensions.Options;
 using Polly;
@@ -16,14 +18,26 @@ namespace Grundstuecksfinder.Services.Importers.Nrw;
 /// coordinates, so each row's map position is looked up by address in the Gebäudereferenzen
 /// (<see cref="GebrefIndex"/>), downloaded first.
 /// </summary>
+/// <remarks>
+/// <paramref name="postcodeAreas"/> tells apart the addresses GEBREF lists at several points
+/// (Duisburg's duplicate street names); without it those rows stay without a position.
+/// </remarks>
 public partial class NrwPropertyImporter(
     ILogger<NrwPropertyImporter> logger,
     IHttpClientFactory httpClientFactory,
     IOptions<NrwImporterOptions> options,
     TimeProvider? timeProvider = null,
-    string? workDirectory = null) : IPropertySource
+    string? workDirectory = null,
+    IPostcodeAreaProvider? postcodeAreas = null) : IPropertySource
 {
     public const string SourceId = "nrw";
+
+    /// <summary>
+    /// What the imported rows contain, as part of the fingerprint: the manifest's timestamps are
+    /// Exact, so new code alone never re-imports NRW; bumping this does, once. r2: rows the
+    /// address alone can't place get their parcel's Lagebezeichnung or their PLZ.
+    /// </summary>
+    public const string Revision = "r2";
 
     /// <summary>Named HttpClient for the manifest and the ZIP; per-attempt limits come from the options.</summary>
     public const string HttpClientName = "Nrw";
@@ -38,8 +52,14 @@ public partial class NrwPropertyImporter(
     /// <summary>The GEBREF download's file name in the work directory, fixed for the same reason.</summary>
     public const string GebrefDownloadFileName = "nrw-gebref.zip";
 
-    // The Grundsteuer CSV's placeholder where the cadastre's address part isn't unique.
-    private const string UnclearSuffix = "uneindeutig";
+    // The Grundsteuer CSV's placeholder where the cadastre's address part isn't unique: a
+    // parcel naming several streets has it as its street, several numbers as its number, several
+    // suffixes as its suffix.
+    private const string Unclear = "uneindeutig";
+
+    // The parcel's whole Lagebezeichnung, e.g. "Im Wiesengrund 3; Kupferstraße 9" where str and
+    // hnr say "uneindeutig"; the column map doesn't cover it.
+    private const int LagebezeichnungIndex = 3;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly string _workDirectory = ImportWorkDirectory.Resolve(workDirectory);
@@ -53,7 +73,7 @@ public partial class NrwPropertyImporter(
     /// </summary>
     public RefreshPolicy RefreshPolicy => RefreshPolicy.Default;
 
-    // CSV columns (0-indexed): id=0, str=4, hnr=5, hnr_zus=6, plz=7, ort=8, gemeinde=9, flaeche_amtl=16
+    // CSV columns (0-indexed): id=0, lagebeztext=3, str=4, hnr=5, hnr_zus=6, plz=7, ort=8, gemeinde=9, flaeche_amtl=16
     public static readonly CsvColumnMap ColumnMap = new(
         Delimiter: ';',
         MinColumnCount: 17,
@@ -70,12 +90,13 @@ public partial class NrwPropertyImporter(
     /// Exact fingerprint, so an edition is downloaded once and never again. The manifest keeps
     /// every year's edition (all in one dataset today); only the newest is imported, since every
     /// import replaces all of NRW's rows. The newest GEBREF edition is part of the fingerprint
-    /// too: a new one moves or adds positions, so it re-imports NRW as well.
+    /// too: a new one moves or adds positions, so it re-imports NRW as well. So is
+    /// <see cref="Revision"/>.
     /// </summary>
     public async Task<SourceProbe> ProbeAsync(CancellationToken ct)
     {
         var grundsteuer = await NewestFileAsync(options.Value.ManifestUrl, ct);
-        var fingerprint = Stamp(grundsteuer);
+        var fingerprint = $"{Revision}:{Stamp(grundsteuer)}";
         if (string.IsNullOrWhiteSpace(options.Value.GebrefManifestUrl))
             return new NrwProbe(grundsteuer.Name, fingerprint);
 
@@ -105,6 +126,8 @@ public partial class NrwPropertyImporter(
         var http = httpClientFactory.CreateClient(HttpClientName);
         // Loaded before the (long) CSV, so a GEBREF that can't be read fails the import right away.
         var gebref = nrwProbe.GebrefFileName is { } gebrefFile ? await LoadGebrefAsync(http, gebrefFile, ct) : null;
+        if (gebref is { Ambiguous: > 0 })
+            await ResolvePostcodesAsync(gebref, ct);
 
         // The ZIP is about 1 GB – download it to a file first so ZipArchive can seek. The work
         // directory needs room for it.
@@ -115,7 +138,7 @@ public partial class NrwPropertyImporter(
             LogDownloadComplete(logger);
 
             long rows = 0;
-            long located = 0;
+            var located = new long[Enum.GetValues<LocatedBy>().Length];
             await using var zip = await ZipFile.OpenReadAsync(zipPath, ct);
             foreach (var entry in zip.Entries.Where(e => e.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
             {
@@ -130,22 +153,28 @@ public partial class NrwPropertyImporter(
                     ct.ThrowIfCancellationRequested();
                     if (!headerSkipped) { headerSkipped = true; continue; }
 
-                    var property = DelimitedPropertyParser.ParseLine(line, ColumnMap);
+                    var fields = DelimitedPropertyParser.SplitCsvLine(line, ColumnMap.Delimiter);
+                    var property = DelimitedPropertyParser.ParseFields(fields, ColumnMap);
                     if (property is null) continue;
 
                     rows++;
-                    if (gebref is not null && Locate(gebref, property) is { } point)
+                    if (gebref is not null)
                     {
-                        property.Lat = point.Lat;
-                        property.Lon = point.Lon;
-                        located++;
+                        var lagebezeichnung = DelimitedPropertyParser.Field(fields, LagebezeichnungIndex, ColumnMap.NullToken);
+                        var (point, by) = Locate(gebref, property, lagebezeichnung);
+                        located[(int)by]++;
+                        if (point is { } p)
+                        {
+                            property.Lat = p.Lat;
+                            property.Lon = p.Lon;
+                        }
                     }
                     yield return property;
                 }
             }
 
             if (gebref is not null)
-                LogLocated(logger, located, rows, rows == 0 ? 0 : (double)located / rows);
+                LogLocated(logger, rows, located, rows == 0 ? 1 : rows);
         }
         finally
         {
@@ -154,16 +183,53 @@ public partial class NrwPropertyImporter(
         }
     }
 
+    /// <summary>How a row got its position, for the import's log.</summary>
+    private enum LocatedBy { Address, AddressAndPostcode, Lagebezeichnung, None }
+
     /// <summary>
-    /// The row's GEBREF position. A suffix of "uneindeutig" means the parcel carries several of
-    /// the number's suffixes (17, 17a, …), so the number's own building is the closest the data
-    /// gets — about 97,000 rows that would otherwise have no position.
+    /// The row's GEBREF position, by its own address first. A suffix of "uneindeutig" means the
+    /// parcel carries several of the number's suffixes (17, 17a, …), so the number's own
+    /// building is the closest the data gets. A street or number of "uneindeutig" (~183,000
+    /// rows) names no address at all; their parcel's Lagebezeichnung lists the real ones, and
+    /// the first GEBREF knows is a building on the parcel. It also places ~7,000 rows whose own
+    /// address GEBREF spells differently or doesn't list.
     /// </summary>
-    private static (float Lat, float Lon)? Locate(GebrefIndex gebref, Property property) =>
-        gebref.Find(property.Gemeinde, property.Str, property.Hnr, property.HnrZus)
-        ?? (string.Equals(property.HnrZus, UnclearSuffix, StringComparison.OrdinalIgnoreCase)
-            ? gebref.Find(property.Gemeinde, property.Str, property.Hnr, suffix: null)
-            : null);
+    private static (GebrefMatch? Point, LocatedBy By) Locate(GebrefIndex gebref, Property property, string? lagebezeichnung)
+    {
+        var own = gebref.Find(property.Gemeinde, property.Str, property.Hnr, property.HnrZus, property.Plz)
+            ?? (string.Equals(property.HnrZus, Unclear, StringComparison.OrdinalIgnoreCase)
+                ? gebref.Find(property.Gemeinde, property.Str, property.Hnr, suffix: null, property.Plz)
+                : null);
+        if (own is { } match)
+            return (match, match.ByPostcode ? LocatedBy.AddressAndPostcode : LocatedBy.Address);
+
+        foreach (var address in LagebezeichnungParser.Parse(lagebezeichnung).Addresses)
+        {
+            if (gebref.Find(property.Gemeinde, address.Str, address.Hnr, address.HnrZus, property.Plz) is { } point)
+                return (point, LocatedBy.Lagebezeichnung);
+        }
+        return (null, LocatedBy.None);
+    }
+
+    /// <summary>
+    /// Loads the postcode areas over GEBREF's extent so the PLZ picks among an address's several
+    /// points. Not worth failing the import for: without them those ~9,000 rows just stay
+    /// without a position, as before.
+    /// </summary>
+    private async Task ResolvePostcodesAsync(GebrefIndex gebref, CancellationToken ct)
+    {
+        if (postcodeAreas is null) return;
+        try
+        {
+            var postcodes = await postcodeAreas.LoadAsync(25832, gebref.Extent, ct);
+            var resolvable = gebref.ResolvePostcodes(postcodes);
+            LogPostcodesResolved(logger, resolvable, gebref.Ambiguous);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogPostcodesFailed(logger, ex, gebref.Ambiguous);
+        }
+    }
 
     /// <summary>Downloads the GEBREF ZIP the probe found and reads it into a lookup, deleting the file again.</summary>
     private async Task<GebrefIndex> LoadGebrefAsync(HttpClient http, string fileName, CancellationToken ct)
@@ -253,11 +319,25 @@ public partial class NrwPropertyImporter(
     [LoggerMessage(Level = LogLevel.Information, Message = "Processing {Entry}...")]
     private static partial void LogProcessingEntry(ILogger logger, string entry);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "nrw: GEBREF has {Addresses} addresses with one position; {Ambiguous} listed at several were dropped, {Skipped} lines skipped")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "nrw: GEBREF has {Addresses} addresses with one position and {Ambiguous} listed at several; {Skipped} lines skipped")]
     private static partial void LogGebrefLoaded(ILogger logger, int addresses, int ambiguous, int skipped);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "nrw: {Located} of {Rows} rows have a GEBREF position ({Ratio:P1})")]
-    private static partial void LogLocated(ILogger logger, long located, long rows, double ratio);
+    [LoggerMessage(Level = LogLevel.Information, Message = "nrw: the PLZ tells apart the positions of {Resolvable} of the {Ambiguous} addresses GEBREF lists at several")]
+    private static partial void LogPostcodesResolved(ILogger logger, int resolvable, int ambiguous);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "nrw: postcode areas unavailable; the {Ambiguous} addresses GEBREF lists at several stay without a position")]
+    private static partial void LogPostcodesFailed(ILogger logger, Exception exception, int ambiguous);
+
+    private static void LogLocated(ILogger logger, long rows, long[] located, long divisor) =>
+        LogLocatedSteps(logger, rows,
+            located[(int)LocatedBy.Address], (double)located[(int)LocatedBy.Address] / divisor,
+            located[(int)LocatedBy.AddressAndPostcode], (double)located[(int)LocatedBy.AddressAndPostcode] / divisor,
+            located[(int)LocatedBy.Lagebezeichnung], (double)located[(int)LocatedBy.Lagebezeichnung] / divisor,
+            located[(int)LocatedBy.None], (double)located[(int)LocatedBy.None] / divisor);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "nrw: positions of {Rows} rows: {ByAddress} by address ({AddressRatio:P2}), {ByPostcode} by address and PLZ ({PostcodeRatio:P2}), {ByLagebezeichnung} by the parcel's Lagebezeichnung ({LagebezeichnungRatio:P2}), {None} without ({NoneRatio:P2})")]
+    private static partial void LogLocatedSteps(ILogger logger, long rows, long byAddress, double addressRatio, long byPostcode, double postcodeRatio,
+        long byLagebezeichnung, double lagebezeichnungRatio, long none, double noneRatio);
 }
 
 /// <summary>

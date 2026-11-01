@@ -172,19 +172,23 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
 
         run.Should().NotBeNull();
         run!.Source.Should().Be(NrwPropertyImporter.SourceId);
-        run.Fingerprint.Should().Be($"{ZipFileName}@{ZipTimestamp}");
+        run.Fingerprint.Should().Be($"{NrwPropertyImporter.Revision}:{ZipFileName}@{ZipTimestamp}");
         run.RecordCount.Should().BeGreaterThan(0);
     }
 
-    [Fact]
-    public async Task RunAsync_AlreadyImported_SkipsImport()
+    [Theory]
+    // The same edition, imported by the current code: nothing to do.
+    [InlineData(true, false)]
+    // The same edition, imported before the revision: the next run re-imports it once.
+    [InlineData(false, true)]
+    public async Task RunAsync_SameEdition_ReimportsOnlyForANewRevision(bool currentRevision, bool expectDownload)
     {
-        // The same version is already being served
         await using (var context = fixture.CreateContext())
         {
+            var fingerprint = $"{ZipFileName}@{ZipTimestamp}";
             context.SourceStates.Add(ImportSeed.Serving(ImportSeed.Completed(
                 NrwPropertyImporter.SourceId, DateTimeOffset.UtcNow, recordCount: 999,
-                fingerprint: $"{ZipFileName}@{ZipTimestamp}")));
+                fingerprint: currentRevision ? $"{NrwPropertyImporter.Revision}:{fingerprint}" : fingerprint)));
             await context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
@@ -207,7 +211,7 @@ public sealed class NrwPropertyImporterIntegrationTests(PostgresFixture fixture)
 
         await RunImportsAsync(handler, TestContext.Current.CancellationToken);
 
-        downloadCalled.Should().BeFalse("ZIP should not be downloaded when already imported");
+        downloadCalled.Should().Be(expectDownload);
     }
 
     [Fact]
