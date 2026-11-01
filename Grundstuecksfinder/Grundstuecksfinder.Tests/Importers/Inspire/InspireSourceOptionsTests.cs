@@ -56,6 +56,46 @@ public sealed class InspireSourceOptionsTests
     }
 
     [Fact]
+    public void Validate_Buildings_WithParcelLagebezeichnung_AreValid()
+    {
+        var source = Valid("rp");
+        source.ParcelFeatureType = new ParcelFeatureTypeOptions
+        {
+            TypeName = "ave:Flurstueck", AreaField = "flaeche", GemeindeField = "gemeinde", LagebezeichnungField = "lagebeztxt",
+        };
+        source.AddressSource = new AddressSourceOptions { Type = AddressSourceType.ParcelLagebezeichnung };
+        source.BuildingFeatureType = new BuildingFeatureTypeOptions();
+
+        InspireSourceOptions.Validate([source], []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_Buildings_WithAnAddressService_AreRejected()
+    {
+        var source = Valid();
+        source.BuildingFeatureType = new BuildingFeatureTypeOptions();
+
+        InspireSourceOptions.Validate([source], []).Should().ContainSingle()
+            .Which.Should().Be("sh: BuildingFeatureType is only read with AddressSource.Type ParcelLagebezeichnung.");
+    }
+
+    [Fact]
+    public void Validate_BrokenBuildingFeatureType_IsReported()
+    {
+        var source = Valid("rp");
+        source.ParcelFeatureType = new ParcelFeatureTypeOptions
+        {
+            TypeName = "ave:Flurstueck", AreaField = "flaeche", GemeindeField = "gemeinde", LagebezeichnungField = "lagebeztxt",
+        };
+        source.AddressSource = new AddressSourceOptions { Type = AddressSourceType.ParcelLagebezeichnung };
+        source.BuildingFeatureType = new BuildingFeatureTypeOptions { TypeName = "GebaeudeBauwerk", Namespace = "urn:x", LagebezeichnungField = " " };
+
+        InspireSourceOptions.Validate([source], []).Should().BeEquivalentTo(
+            "rp: BuildingFeatureType.Namespace needs a TypeName with a prefix to bind it to.",
+            "rp: BuildingFeatureType.LagebezeichnungField must name the element holding the building's addresses.");
+    }
+
+    [Fact]
     public void Validate_BrokenParcelFeatureType_IsReported()
     {
         var source = Valid();

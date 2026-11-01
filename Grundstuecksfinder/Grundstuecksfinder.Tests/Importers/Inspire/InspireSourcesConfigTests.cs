@@ -95,6 +95,7 @@ public sealed class InspireSourcesConfigTests
         rp.ParcelFeatureType.GemeindeField.Should().Be("gemeinde");
         rp.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
         rp.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
+        rp.BuildingFeatureType.Should().BeEquivalentTo(new { TypeName = "ave:GebaeudeBauwerk", Namespace = (string?)null, LagebezeichnungField = "lagebeztxt" });
     }
 
     [Fact]
@@ -108,6 +109,12 @@ public sealed class InspireSourcesConfigTests
         th.ParcelFeatureType.LagebezeichnungField.Should().Be("lagebeztxt");
         th.PageSize.Should().Be(1000, "5,000 parcels take the server 43 s, 1,000 only 2 s");
         th.FillMissingPlzFromPostcodeAreas.Should().BeTrue("ALKIS vereinfacht carries no PLZ");
+        th.BuildingFeatureType.Should().BeEquivalentTo(new
+        {
+            TypeName = "ave:GebaeudeBauwerk",
+            Namespace = "http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/1.0",
+            LagebezeichnungField = "lagebeztxt",
+        });
     }
 
     [Fact]

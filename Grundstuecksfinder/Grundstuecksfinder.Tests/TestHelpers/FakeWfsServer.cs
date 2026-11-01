@@ -15,6 +15,12 @@ public sealed record FakeParcel(
     string? Lagebezeichnung = null, string Gemeinde = "Testgemeinde");
 
 /// <summary>
+/// A rectangular ALKIS-vereinfacht building for <see cref="FakeWfsServer"/>, served at
+/// <see cref="FakeWfsServer.ParcelUrl"/> as ave:GebaeudeBauwerk; Lagebezeichnung null names no address.
+/// </summary>
+public sealed record FakeBuilding(string Id, double MinX, double MinY, double MaxX, double MaxY, string? Lagebezeichnung);
+
+/// <summary>
 /// An address point for <see cref="FakeWfsServer"/>, in the server's CRS; Plz null publishes none.
 /// Suffix is only served with <see cref="FakeWfsServer.FlatAddresses"/>.
 /// </summary>
@@ -33,6 +39,7 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
     public List<FakeParcel> Parcels { get; } = [];
     public List<FakeAddress> Addresses { get; } = [];
+    public List<FakeBuilding> Buildings { get; } = [];
 
     /// <summary>Returns at most this many features per GetFeature, whatever count was asked for.</summary>
     public int? ServerCap { get; set; }
@@ -101,6 +108,7 @@ public sealed class FakeWfsServer : HttpMessageHandler
     {
         var query = Query(uri);
         var isParcels = uri.ToString().StartsWith(ParcelUrl, StringComparison.Ordinal);
+        var isBuildings = isParcels && query.GetValueOrDefault("typenames", "").EndsWith("GebaeudeBauwerk", StringComparison.Ordinal);
 
         if (!isParcels && query.ContainsKey("limit") && !query.ContainsKey("request"))
         {
@@ -116,7 +124,9 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
         if (query.GetValueOrDefault("resultType") == "hits")
         {
-            var hits = isParcels
+            var hits = isBuildings
+                ? Buildings.Count.ToString(CultureInfo.InvariantCulture)
+                : isParcels
                 ? ParcelHitsOverride ?? Parcels.Count.ToString(CultureInfo.InvariantCulture)
                 : AddressHitsOverride ?? Addresses.Count.ToString(CultureInfo.InvariantCulture);
             return Xml($"""<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" numberMatched="{hits}" numberReturned="0"/>""");
@@ -145,6 +155,11 @@ public sealed class FakeWfsServer : HttpMessageHandler
 
         var bbox = query["bbox"].Split(',').Take(4)
             .Select(v => double.Parse(v, CultureInfo.InvariantCulture)).ToArray();
+
+        if (isBuildings)
+            return Xml(BuildingCollection(Buildings
+                .Where(b => b.MinX <= bbox[2] && b.MaxX >= bbox[0] && b.MinY <= bbox[3] && b.MaxY >= bbox[1])
+                .OrderBy(b => b.Id, StringComparer.Ordinal).Take(limit)));
 
         return isParcels
             ? Xml(ParcelCollection(Parcels
@@ -207,6 +222,25 @@ public sealed class FakeWfsServer : HttpMessageHandler
                   <gemeinde>{SecurityElement.Escape(p.Gemeinde)}</gemeinde>
                   {lagebezeichnung}
                 </Flurstueck></wfs:member>
+                """);
+        }
+        return sb.Append("</wfs:FeatureCollection>").ToString();
+    }
+
+    private string BuildingCollection(IEnumerable<FakeBuilding> buildings)
+    {
+        var sb = new StringBuilder(CollectionStart("http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/2.0"));
+        foreach (var b in buildings)
+        {
+            var ring = Ring(new FakeParcel(b.Id, b.MinX, b.MinY, b.MaxX, b.MaxY, 0));
+            sb.Append(CultureInfo.InvariantCulture, $"""
+                <wfs:member><GebaeudeBauwerk gml:id="{b.Id}">
+                  <geometrie><gml:Polygon gml:id="{b.Id}_g" srsName="{ResponseSrsName}"><gml:exterior><gml:LinearRing>
+                    <gml:posList>{ring}</gml:posList>
+                  </gml:LinearRing></gml:exterior></gml:Polygon></geometrie>
+                  <funktion>Wohngebäude</funktion>
+                  <lagebeztxt>{SecurityElement.Escape(b.Lagebezeichnung ?? "")}</lagebeztxt>
+                </GebaeudeBauwerk></wfs:member>
                 """);
         }
         return sb.Append("</wfs:FeatureCollection>").ToString();

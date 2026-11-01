@@ -37,8 +37,8 @@ public sealed record FingerprintPart(string Value, bool IsExact)
 /// their own addresses (<see cref="Inspire.Addresses.AddressSourceType.ParcelLagebezeichnung"/>).
 /// </summary>
 /// <remarks>
-/// The fingerprint is <see cref="Revision"/> and the parts' values, joined by ':', parcels
-/// first. A composite is only as precise as its weakest part: it is
+/// The fingerprint is <see cref="Revision"/> (with <see cref="BuildingsMarker"/> where
+/// buildings place the addresses) and the parts' values, joined by ':', parcels first. A composite is only as precise as its weakest part: it is
 /// <see cref="FingerprintKind.Exact"/> only when both parts are, so one WFS hit count makes the
 /// whole probe <see cref="FingerprintKind.Approximate"/>.
 /// </remarks>
@@ -53,12 +53,23 @@ public sealed record InspireProbe(string Fingerprint, FingerprintKind Kind, Fing
     /// </summary>
     public const string Revision = "r2";
 
+    /// <summary>
+    /// Appended to <see cref="Revision"/> for a source whose addresses are placed at their
+    /// buildings (<see cref="InspireSourceOptions.BuildingFeatureType"/>), so switching that on
+    /// or off re-imports the source once, like a new revision.
+    /// </summary>
+    public const string BuildingsMarker = "b";
+
     public static InspireProbe Combine(FingerprintPart parcels, FingerprintPart addresses) =>
         new($"{Revision}:{parcels.Value}:{addresses.Value}",
             parcels.IsExact && addresses.IsExact ? FingerprintKind.Exact : FingerprintKind.Approximate,
             parcels, addresses);
 
-    /// <summary>The probe of a source without an address side: the parcel part alone.</summary>
-    public static InspireProbe ParcelsOnly(FingerprintPart parcels) =>
-        new($"{Revision}:{parcels.Value}", parcels.IsExact ? FingerprintKind.Exact : FingerprintKind.Approximate, parcels, null);
+    /// <summary>
+    /// The probe of a source without an address side: the parcel part alone, marked if
+    /// <paramref name="withBuildings"/>.
+    /// </summary>
+    public static InspireProbe ParcelsOnly(FingerprintPart parcels, bool withBuildings = false) =>
+        new($"{Revision}{(withBuildings ? BuildingsMarker : "")}:{parcels.Value}",
+            parcels.IsExact ? FingerprintKind.Exact : FingerprintKind.Approximate, parcels, null);
 }

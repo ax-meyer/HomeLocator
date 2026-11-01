@@ -40,4 +40,23 @@ public partial class WfsLiveEndpointTests
         parcels.SelectMany(p => LagebezeichnungParser.Parse(p.Lagebezeichnung).Addresses)
             .Should().HaveCountGreaterThan(50, "most parcels in the centre name a house number");
     }
+
+    [Fact]
+    public async Task TH_Buildings_NameReadableAddresses()
+    {
+        using var stream = await FetchGetFeature(
+            "https://www.geoproxy.geoportal-th.de/geoproxy/services/adv_alkis_wfs",
+            "ave:GebaeudeBauwerk",
+            "642000,5649000,642500,5649500",
+            "urn:ogc:def:crs:EPSG::25832",
+            count: 1000,
+            typeNamespace: ThAveNamespace);
+
+        var buildings = WfsGmlParser.ParseBuildings(stream, new BuildingFeatureTypeOptions { Namespace = ThAveNamespace }).Features;
+
+        buildings.Should().HaveCountGreaterThan(50, "Erfurt's centre is full of houses");
+        buildings.Should().OnlyContain(b => b.Geometry.IsValid);
+        buildings.SelectMany(b => LagebezeichnungParser.Parse(b.Lagebezeichnung).Addresses)
+            .Should().HaveCountGreaterThan(50);
+    }
 }

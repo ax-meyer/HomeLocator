@@ -31,6 +31,8 @@ public sealed class InspirePropertyImporter : IPropertySource
     private readonly InspireParcelProvider _parcels;
     /// <summary>Null for <see cref="AddressSourceType.ParcelLagebezeichnung"/>: nothing to join.</summary>
     private readonly IAddressProvider? _addresses;
+    /// <summary>Null unless <see cref="InspireSourceOptions.BuildingFeatureType"/> is set.</summary>
+    private readonly InspireBuildingProvider? _buildings;
 
     public InspirePropertyImporter(
         ILogger<InspirePropertyImporter> logger,
@@ -55,6 +57,10 @@ public sealed class InspirePropertyImporter : IPropertySource
             new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, parcelType.TypeName, parcelType.Namespace),
             parcelType);
         _addresses = CreateAddressProvider(client, ImportWorkDirectory.Resolve(workDirectory));
+        if (options.BuildingFeatureType is { } buildingType)
+            _buildings = new InspireBuildingProvider(
+                new WfsFeatureType(client, options, logger, options.ParcelWfsUrl, buildingType.TypeName, buildingType.Namespace),
+                buildingType);
     }
 
     public string Id => _options.Source;
@@ -96,7 +102,7 @@ public sealed class InspirePropertyImporter : IPropertySource
     {
         var parcels = await _parcels.ProbeAsync(ct);
         return _addresses is null
-            ? InspireProbe.ParcelsOnly(parcels)
+            ? InspireProbe.ParcelsOnly(parcels, withBuildings: _buildings is not null)
             : InspireProbe.Combine(parcels, await _addresses.ProbeAsync(ct));
     }
 
@@ -112,7 +118,7 @@ public sealed class InspirePropertyImporter : IPropertySource
             throw new ArgumentException($"Expected the probe of {nameof(InspirePropertyImporter)}, got {probe.GetType().Name}.", nameof(probe));
 
         var rows = _addresses is null
-            ? new ParcelLagebezeichnungImport(_options, _logger, _parcels, _postcodeAreas).RunAsync(run, ct)
+            ? new ParcelLagebezeichnungImport(_options, _logger, _parcels, _postcodeAreas, _buildings).RunAsync(run, ct)
             : new ParcelAddressJoin(_options, _logger, _parcels, _addresses, _postcodeAreas).RunAsync(inspireProbe, run, ct);
         await foreach (var property in rows)
             yield return property;

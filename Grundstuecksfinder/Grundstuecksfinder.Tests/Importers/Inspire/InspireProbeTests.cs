@@ -78,6 +78,17 @@ public sealed class InspireProbeTests
     }
 
     [Fact]
+    public void ParcelsOnly_WithBuildings_DiffersFromWithout()
+    {
+        // Switching buildings on (or off) must re-import the source once, like a new revision.
+        var parcels = new FingerprintPart("6208246", false);
+
+        InspireProbe.ParcelsOnly(parcels, withBuildings: true).Fingerprint.Should()
+            .Be($"{InspireProbe.Revision}{InspireProbe.BuildingsMarker}:6208246")
+            .And.NotBe(InspireProbe.ParcelsOnly(parcels).Fingerprint);
+    }
+
+    [Fact]
     public void ParcelsOnly_ExactPart_IsExact() =>
         InspireProbe.ParcelsOnly(new FingerprintPart("\"etag\"", true)).Kind.Should().Be(FingerprintKind.Exact);
 

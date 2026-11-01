@@ -36,6 +36,13 @@ public partial class InspireSourceOptions
     public ParcelFeatureTypeOptions ParcelFeatureType { get; set; } = new();
 
     /// <summary>
+    /// Only with <see cref="AddressSourceType.ParcelLagebezeichnung"/>: the buildings of the
+    /// parcel WFS. Set, a parcel naming several addresses pins each at the building naming it
+    /// (see <see cref="BuildingPositions"/>); unset, those addresses get no position.
+    /// </summary>
+    public BuildingFeatureTypeOptions? BuildingFeatureType { get; set; }
+
+    /// <summary>
     /// Where the addresses (text + point) come from. The parcel side is always the WFS above;
     /// the address side is whichever of the state's datasets is usable and fastest.
     /// </summary>
@@ -205,6 +212,12 @@ public partial class InspireSourceOptions
             if (s.AddressSource.Type == AddressSourceType.ParcelLagebezeichnung
                 && (s.ParcelFeatureType.LagebezeichnungField is null || s.ParcelFeatureType.GemeindeField is null))
                 errors.Add($"{name}: AddressSource.Type {AddressSourceType.ParcelLagebezeichnung} needs ParcelFeatureType.LagebezeichnungField and GemeindeField.");
+            if (s.BuildingFeatureType is { } buildings)
+            {
+                errors.AddRange(buildings.Validate().Select(e => $"{name}: BuildingFeatureType.{e}"));
+                if (s.AddressSource.Type != AddressSourceType.ParcelLagebezeichnung)
+                    errors.Add($"{name}: BuildingFeatureType is only read with AddressSource.Type {AddressSourceType.ParcelLagebezeichnung}.");
+            }
             if (s.CrsEpsgCode is not (>= 25831 and <= 25833))
                 errors.Add($"{name}: Crs must be ETRS89/UTM (EPSG 25831–25833), was \"{s.Crs}\".");
 
