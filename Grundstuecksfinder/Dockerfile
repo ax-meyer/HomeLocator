@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 
 COPY ["Grundstuecksfinder/Grundstuecksfinder.csproj", "Grundstuecksfinder/"]
@@ -16,7 +16,7 @@ RUN dotnet tool install --global dotnet-project-licenses \
         --output-filename /app/publish/wwwroot/licenses.json \
     || echo "License generation failed – skipping."
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/publish .

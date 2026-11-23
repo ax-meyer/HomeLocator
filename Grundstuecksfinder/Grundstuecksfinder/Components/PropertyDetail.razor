@@ -90,10 +90,10 @@
             return;
         }
 
+        // Show the status during the delay; Blazor re-renders by itself when the handler ends.
         StateHasChanged();
         await Task.Delay(1500);
         _copyStatus = null;
-        StateHasChanged();
     }
 
     private void ClickGoogle()     => AppMetrics.RecordOutgoingClick("google");
