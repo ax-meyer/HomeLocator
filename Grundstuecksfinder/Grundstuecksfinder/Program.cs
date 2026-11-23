@@ -14,6 +14,10 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Serilog;
 
+// Container health check (see HealthProbe): answer before anything else is built.
+if (args is [HealthProbe.Argument])
+    return await HealthProbe.RunAsync(HealthProbe.DefaultUri);
+
 var builder = WebApplication.CreateBuilder(args);
 
 var enableDevSeeding = builder.Configuration.GetValue<bool>("EnableDevSeeding");
@@ -165,3 +169,4 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+return 0;
